@@ -37,6 +37,8 @@
     let states = {};
     let statesLoaded = false;
     let lastCssSyncAt = 0;
+    let fallbackStyle = document.getElementById("__andypsx-live-style");
+    let fallbackCssPromise = null;
     let currentUrl = location.href;
     let pending = false;
     let queue = Promise.resolve();
@@ -112,6 +114,45 @@
       );
     }
 
+    async function loadFallbackCss() {
+      if (!fallbackCssPromise) {
+        fallbackCssPromise = fetch(
+          chrome.runtime.getURL("modules/vista-limpia/live.css"),
+        ).then((response) => {
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+          return response.text();
+        });
+      }
+
+      return fallbackCssPromise;
+    }
+
+    async function setFallbackCss(enabled) {
+      if (!enabled) {
+        fallbackStyle?.remove();
+        fallbackStyle = null;
+        return true;
+      }
+
+      if (fallbackStyle?.isConnected) return true;
+
+      try {
+        const css = await loadFallbackCss();
+        fallbackStyle =
+          document.getElementById("__andypsx-live-style") ??
+          document.createElement("style");
+        fallbackStyle.id = "__andypsx-live-style";
+        fallbackStyle.textContent = css;
+        (document.head ?? document.documentElement).append(fallbackStyle);
+        return true;
+      } catch (error) {
+        console.warn("[andypsx-live] No se pudo aplicar CSS local:", error);
+        return false;
+      }
+    }
+
     async function ensureCssState() {
       if (!statesLoaded || !config.isTargetPage(location.href)) return;
 
@@ -126,8 +167,12 @@
       lastCssSyncAt = now;
 
       console.log(
-        `[andypsx-live] Vista limpia no coincide (deseada: ${desired}, aplicada: ${applied}); resincronizando.`,
+        `[andypsx-live] Vista limpia no coincide (deseada: ${desired}, aplicada: ${applied}); ${
+          desired ? "aplicando CSS local" : "quitando CSS local"
+        }.`,
       );
+
+      await setFallbackCss(desired);
 
       try {
         await chrome.runtime.sendMessage({

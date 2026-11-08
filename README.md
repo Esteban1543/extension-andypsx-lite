@@ -197,9 +197,10 @@ sesión, o abre `https://andypsx.com/live` en un navegador sin cookies.
 - `Sesión sin comprobar`: el content script de la pestaña no responde. El
   background intenta inyectar `session-probe.js`. Si sigue igual, usa
   **Recargar página** en el popup.
-- `Vista limpia no coincide ... resincronizando` repetido: el background no está
-  aplicando el CSS. Revisa que la pestaña actual sea la página objetivo. Si el
-  target cambió, el background recarga la extensión automáticamente.
+- `Vista limpia no coincide ... aplicando CSS local`: el background no está
+  aplicando el CSS. El content script aplica un CSS local de respaldo. Si sigue
+  igual, revisa que la pestaña actual sea la página objetivo. Si el target
+  cambió, el background recarga la extensión automáticamente.
 - `[andypsx-live] Error al insertar CSS`: `insertCSS` falló. Revisa la ruta del
   CSS y los permisos del manifest.
 - Si tras recargar extensión y página sigue igual, revisa que no haya otra copia
@@ -273,7 +274,9 @@ sesión, o abre `https://andypsx.com/live` en un navegador sin cookies.
 - Si el popup detecta sesión sin comprobar, muestra “Sesión sin comprobar” y un
   botón para recargar la página.
 - `content.js` compara el CSS aplicado con el estado deseado. Si no coincide,
-  pide `modules:sync` al background.
+  aplica un `<style>` local con `modules/vista-limpia/live.css` y pide
+  `modules:sync` al background.
+- Si el background no responde, el CSS local mantiene Vista limpia funcionando.
 - Si no se puede comprobar la sesión, Vista limpia queda apagada.
 - El login de la cabecera y el login de Kick no cuentan.
 
@@ -399,7 +402,7 @@ background y el popup lo bloquearán cuando la tarjeta **Tu directo** muestre
 
 ```bash
 cd /home/manager/Downloads
-zip -r andypsx-extension-v1.3.3.zip andypsx-extension-v1.0.4 \
+zip -r andypsx-extension-v1.3.4.zip andypsx-extension-v1.0.4 \
   -x '*/.git/*' '*/__pycache__/*'
 ```
 

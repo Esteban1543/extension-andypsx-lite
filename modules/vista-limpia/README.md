@@ -51,6 +51,10 @@ Si no hay sesión:
 - el popup deshabilita el toggle de Vista limpia;
 - la preferencia guardada se conserva y se vuelve a aplicar al iniciar sesión.
 
+Si el background no aplica el CSS, `content.js` inyecta un `<style>` local con
+`live.css` como respaldo. Al cerrar sesión o apagar el módulo, ese estilo se
+elimina.
+
 ## Bloques del CSS
 
 1. **Ocultar**: cabecera, título, pie, directo, Bonus Hunt, Soporte,
