@@ -189,14 +189,14 @@ const TRUSTED_CLICKS_NOTE =
   "Durante cada clic aparece la barra «Chrome está siendo controlado por software de prueba». Con DevTools abierto el clic puede fallar y el raffle se omite.";
 
 async function saveTrustedClicks(input) {
-  const previous = input.checked;
-  const next = !previous;
+  // El change de un checkbox normal ya cambió el estado: next es el valor
+  // actual, no el inverso.
+  const next = input.checked;
   hideStatus();
   input.disabled = true;
 
   try {
     await updateModuleSettings("raffles", { trustedClicks: next });
-    input.checked = next;
     states = {
       ...states,
       raffles: {
@@ -212,6 +212,7 @@ async function saveTrustedClicks(input) {
       showStatus(TRUSTED_CLICKS_NOTE, "warn");
     }
   } catch (error) {
+    input.checked = !next;
     showStatus("No se pudo guardar el ajuste de clics.", "error");
     console.error("[andypsx-live] No se pudo guardar trustedClicks:", error);
   } finally {
@@ -481,8 +482,12 @@ bindEvents();
 
 watchSession((session) => {
   // Ignora sesiones guardadas desde otro target (p. ej. la copia local
-  // mientras se mira producción, o al revés).
-  const tabOrigin = sessionInfo.tabUrl ? originOf(sessionInfo.tabUrl) : null;
+  // mientras se mira producción, o al revés). Solo si la pestaña activa es
+  // un target: si no, la sesión guardada es la que vale.
+  const tabOrigin =
+    sessionInfo.tabIsTarget && sessionInfo.tabUrl
+      ? originOf(sessionInfo.tabUrl)
+      : null;
   if (tabOrigin && session.origin !== tabOrigin) return;
 
   sessionInfo = {
