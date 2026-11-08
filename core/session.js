@@ -1,4 +1,5 @@
 import { TARGET_ORIGIN } from "./config.js";
+import { log, warn } from "./log.js";
 
 const SESSION_KEY = "session";
 
@@ -105,7 +106,7 @@ export async function getSessionState() {
 
     return session.origin === TARGET_ORIGIN ? session : defaultSession();
   } catch (error) {
-    console.warn("[andypsx-live] No se pudo leer la sesión:", error);
+    warn("No se pudo leer la sesión:", error);
     return defaultSession();
   }
 }
@@ -179,7 +180,7 @@ export function startSessionWatcher({ onChange, shouldCheck = () => true } = {})
     try {
       await saveSessionState(domSession);
     } catch (error) {
-      console.warn("[andypsx-live] No se pudo guardar la sesión:", error);
+      warn("No se pudo guardar la sesión:", error);
       return { ...domSession, origin: TARGET_ORIGIN, updatedAt: Date.now() };
     }
 
@@ -190,7 +191,7 @@ export function startSessionWatcher({ onChange, shouldCheck = () => true } = {})
       : domSession.loggedIn
         ? "iniciada"
         : "no iniciada";
-    console.log(`[andypsx-live] Sesión: ${sessionLabel}.`);
+    log(`Sesión: ${sessionLabel}.`);
 
     try {
       chrome.runtime.sendMessage({
@@ -205,7 +206,7 @@ export function startSessionWatcher({ onChange, shouldCheck = () => true } = {})
       try {
         onChange(domSession);
       } catch (error) {
-        console.warn("[andypsx-live] Error al notificar la sesión:", error);
+        warn("Error al notificar la sesión:", error);
       }
     }
 

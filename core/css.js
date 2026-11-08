@@ -1,4 +1,5 @@
 import { CSS_ORIGIN, CSS_REMOVE_ATTEMPTS, isTargetUrl } from "./config.js";
+import { debug } from "./log.js";
 import { matchesTarget } from "./url.js";
 
 const tabQueues = new Map();
@@ -50,29 +51,37 @@ async function insertCss(tabId, file) {
       files: [file],
       origin: CSS_ORIGIN,
     });
+    return true;
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
-    console.debug(`[andypsx-live] No se pudo insertar ${file}:`, detail);
+    debug(`No se pudo insertar ${file}:`, detail);
     chrome.tabs
       .sendMessage(tabId, {
         type: "css:error",
         detail: `No se pudo insertar ${file}: ${detail}`,
       })
       .catch(() => {});
+    return false;
   }
 }
 
 async function insertActiveModules(tabId, url, states, definitions) {
-  if (!isTargetUrl(url)) return;
+  if (!isTargetUrl(url)) return false;
+
+  let inserted = false;
 
   for (const definition of definitions) {
     if (states?.[definition.id]?.enabled !== true) continue;
     if (!matchesTarget(url, definition.matches)) continue;
 
     for (const file of filesFor(definition)) {
-      await insertCss(tabId, file);
+      if (await insertCss(tabId, file)) {
+        inserted = true;
+      }
     }
   }
+
+  return inserted;
 }
 
 // Limpia todos los módulos y vuelve a insertar solo los activos.
@@ -90,6 +99,6 @@ export function syncTab(tabId, url, getStates, modules) {
     ];
 
     await removeCss(tabId, allFiles);
-    await insertActiveModules(tabId, url, states, definitions);
+    return insertActiveModules(tabId, url, states, definitions);
   });
 }

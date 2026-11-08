@@ -2,6 +2,7 @@ import {
   humanClick,
   isButtonDisabled,
   randomBetween,
+  trustedHumanClick,
   wait,
 } from "../../core/actions.js";
 
@@ -9,11 +10,6 @@ const RAFFLE_SELECTOR = 'section[aria-label^="Raffle:"]';
 const SCAN_DELAY_MS = 150;
 const FIRST_CLICK_DELAY_MS = { min: 5000, max: 10000 };
 const NEXT_CLICK_DELAY_MS = { min: 2000, max: 5000 };
-
-const ATTR_RAFFLE = "data-andypsx-raffle";
-const ATTR_DELAY = "data-andypsx-raffle-delay-ms";
-const ATTR_CLICKED = "data-andypsx-raffle-clicked";
-const ATTR_SKIPPED = "data-andypsx-raffle-skipped";
 
 let activeState = null;
 
@@ -139,12 +135,13 @@ function nextClickDelay(batchHasClick) {
   return randomBetween(range.min, range.max);
 }
 
-export function init(ctx) {
+export async function init(ctx) {
+  const settings = await ctx.getSettings();
   const moduleState = {
     observer: null,
     scanTimer: null,
     tracked: new Map(),
-    ids: new WeakMap(),
+    records: new WeakMap(),
     nextId: 1,
     initialized: false,
     queue: [],
@@ -153,24 +150,30 @@ export function init(ctx) {
     processing: false,
     stopped: false,
     batchHasClick: false,
+    trustedClicks: settings?.trustedClicks === true,
   };
 
   activeState = moduleState;
 
-  function idFor(section) {
-    let id = moduleState.ids.get(section);
+  function recordFor(section) {
+    let record = moduleState.records.get(section);
 
-    if (!id) {
-      id = `raffle-${moduleState.nextId}`;
+    if (!record) {
+      record = {
+        id: `r${moduleState.nextId}`,
+        delayMs: null,
+        clicked: false,
+        skipped: null,
+      };
       moduleState.nextId += 1;
-      moduleState.ids.set(section, id);
+      moduleState.records.set(section, record);
     }
 
-    return id;
+    return record;
   }
 
   function markSkipped(section, reason) {
-    section.setAttribute(ATTR_SKIPPED, reason);
+    recordFor(section).skipped = reason;
   }
 
   function enqueue(section) {
@@ -187,8 +190,9 @@ export function init(ctx) {
   }
 
   async function waitAndClick(section, button, title) {
+    const record = recordFor(section);
     const delayMs = nextClickDelay(moduleState.batchHasClick);
-    section.setAttribute(ATTR_DELAY, String(Math.round(delayMs)));
+    record.delayMs = Math.round(delayMs);
     ctx.log(`Esperando ${formatSeconds(delayMs)} antes de participar:`, title);
 
     await wait(delayMs);
@@ -206,23 +210,33 @@ export function init(ctx) {
       return false;
     }
 
-    const clicked = await humanClick(button, {
-      shouldStop: () => moduleState.stopped,
-    });
+    const clicked = moduleState.trustedClicks
+      ? await trustedHumanClick(button, {
+          shouldStop: () => moduleState.stopped,
+        })
+      : await humanClick(button, {
+          shouldStop: () => moduleState.stopped,
+        });
 
     if (!clicked || moduleState.stopped) {
-      if (!moduleState.stopped) markSkipped(section, "not-clickable");
+      if (!moduleState.stopped) {
+        markSkipped(section, "not-clickable");
+        if (moduleState.trustedClicks) {
+          ctx.log("Clic confiable falló:", title);
+        }
+      }
       return false;
     }
 
     moduleState.batchHasClick = true;
-    section.setAttribute(ATTR_CLICKED, "true");
-    ctx.log("Clic humano en Participar:", title);
+    record.clicked = true;
+    ctx.log("Clic en Participar:", title);
     ctx.bus.emit("raffles:clicked", {
-      id: idFor(section),
+      id: record.id,
       title,
       at: Date.now(),
       delayMs: Math.round(delayMs),
+      trusted: moduleState.trustedClicks,
     });
 
     return true;
@@ -291,9 +305,9 @@ export function init(ctx) {
     const currentSections = new Map();
 
     for (const section of sections) {
-      const snapshot = readRaffle(section, idFor(section));
+      const record = recordFor(section);
+      const snapshot = readRaffle(section, record.id);
       currentSections.set(section, snapshot);
-      section.setAttribute(ATTR_RAFFLE, snapshot.id);
     }
 
     const added = [];
@@ -305,10 +319,6 @@ export function init(ctx) {
     for (const [section, snapshot] of moduleState.tracked) {
       if (!currentSections.has(section)) {
         removed.push(snapshot);
-        section.removeAttribute(ATTR_RAFFLE);
-        section.removeAttribute(ATTR_DELAY);
-        section.removeAttribute(ATTR_CLICKED);
-        section.removeAttribute(ATTR_SKIPPED);
       }
     }
 
@@ -383,15 +393,6 @@ export function destroy() {
   moduleState.queue.length = 0;
   moduleState.observer?.disconnect();
   window.clearTimeout(moduleState.scanTimer);
-
-  for (const section of document.querySelectorAll(
-    `[${ATTR_RAFFLE}], [${ATTR_DELAY}], [${ATTR_CLICKED}], [${ATTR_SKIPPED}]`,
-  )) {
-    section.removeAttribute(ATTR_RAFFLE);
-    section.removeAttribute(ATTR_DELAY);
-    section.removeAttribute(ATTR_CLICKED);
-    section.removeAttribute(ATTR_SKIPPED);
-  }
 
   activeState = null;
 }

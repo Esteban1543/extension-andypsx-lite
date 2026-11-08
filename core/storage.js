@@ -1,4 +1,5 @@
 import { LEGACY_STORAGE_KEY, STORAGE_KEYS } from "./config.js";
+import { warn } from "./log.js";
 
 const MODULES_KEY = STORAGE_KEYS.modules;
 let storageQueue = Promise.resolve();
@@ -89,7 +90,7 @@ async function removeLegacyKey() {
   try {
     await chrome.storage.sync.remove(LEGACY_STORAGE_KEY);
   } catch (error) {
-    console.warn("[andypsx-live] No se pudo borrar la clave antigua:", error);
+    warn("No se pudo borrar la clave antigua:", error);
   }
 }
 
@@ -145,6 +146,35 @@ export function setModuleEnabled(id, enabled) {
 
     await chrome.storage.sync.set({
       [MODULES_KEY]: withEnabledModule(raw.modules, id, enabled),
+    });
+
+    await removeLegacyKey();
+  });
+}
+
+export function updateModuleSettings(id, patch) {
+  if (typeof id !== "string" || id.length === 0) {
+    return Promise.reject(
+      new TypeError("El id del módulo debe ser una cadena no vacía."),
+    );
+  }
+  if (!isRecord(patch)) {
+    return Promise.reject(new TypeError("Los ajustes deben ser un objeto."));
+  }
+
+  return withStorageLock(async () => {
+    const raw = await readRaw();
+    const entry = isRecord(raw.modules[id]) ? raw.modules[id] : {};
+    const settings = isRecord(entry.settings) ? entry.settings : {};
+
+    await chrome.storage.sync.set({
+      [MODULES_KEY]: {
+        ...raw.modules,
+        [id]: {
+          ...entry,
+          settings: { ...settings, ...clone(patch) },
+        },
+      },
     });
 
     await removeLegacyKey();

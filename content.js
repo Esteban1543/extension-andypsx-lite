@@ -1,5 +1,5 @@
 (() => {
-  const FLAG = "__andypsxLiveContentCargado";
+  const FLAG = "__extContentLoaded";
   if (globalThis[FLAG]) return;
   globalThis[FLAG] = true;
 
@@ -13,6 +13,7 @@
       storage,
       urlModule,
       sessionModule,
+      logModule,
       moduleIndex,
     ] = await Promise.all([
       import(chrome.runtime.getURL("core/bus.js")),
@@ -20,8 +21,11 @@
       import(chrome.runtime.getURL("core/storage.js")),
       import(chrome.runtime.getURL("core/url.js")),
       import(chrome.runtime.getURL("core/session.js")),
+      import(chrome.runtime.getURL("core/log.js")),
       import(chrome.runtime.getURL("modules/index.js")),
     ]);
+
+    await logModule.initLogger();
 
     const modules = Array.isArray(moduleIndex.modules)
       ? moduleIndex.modules
@@ -36,9 +40,10 @@
     const bus = busModule.createBus();
     let states = {};
     let statesLoaded = false;
-    let lastCssSyncAt = 0;
-    let fallbackStyle = document.getElementById("__andypsx-live-style");
-    let fallbackCssPromise = null;
+    let adoptedStyleSheet = null;
+    let cssTextPromise = null;
+    let cssFailureCount = 0;
+    let nextCssAttemptAt = 0;
     let currentUrl = location.href;
     let pending = false;
     let queue = Promise.resolve();
@@ -54,13 +59,10 @@
           const next = await storage.getModuleStates(modules);
           return next[id]?.settings ?? {};
         },
-        log: (...args) => console.log(`[${id}]`, ...args),
+        log: (...args) => logModule.log(`[${id}]`, ...args),
       }),
       onError: (error, id) => {
-        console.error(
-          `[andypsx-live] Módulo "${id}" en la página:`,
-          error,
-        );
+        logModule.warn(`Módulo "${id}" en la página:`, error);
       },
     });
 
@@ -71,17 +73,14 @@
           .then(scheduleSync)
           .then(ensureCssState)
           .catch((error) =>
-            console.error(
-              "[andypsx-live] No se pudo actualizar la sesión:",
-              error,
-            ),
+            logModule.warn("No se pudo actualizar la sesión:", error),
           );
       },
     });
 
     chrome.runtime.onMessage.addListener((message) => {
       if (message?.type === "css:error") {
-        console.error("[andypsx-live] Error al insertar CSS:", message.detail);
+        logModule.warn("No se pudo insertar CSS:", message.detail);
       }
     });
 
@@ -114,43 +113,101 @@
       );
     }
 
-    async function loadFallbackCss() {
-      if (!fallbackCssPromise) {
-        fallbackCssPromise = fetch(
-          chrome.runtime.getURL("modules/vista-limpia/live.css"),
-        ).then((response) => {
-          if (!response.ok) {
-            throw new Error(`HTTP ${response.status}`);
+    async function getCssText() {
+      if (!cssTextPromise) {
+        cssTextPromise = (async () => {
+          try {
+            const stored = await chrome.storage.local.get(
+              config.CSS_CACHE_KEY,
+            );
+            const cached = stored[config.CSS_CACHE_KEY];
+
+            if (typeof cached === "string" && cached.length > 0) {
+              return cached;
+            }
+          } catch (error) {
+            logModule.warn("No se pudo leer el CSS guardado:", error);
           }
-          return response.text();
-        });
+
+          try {
+            const response = await chrome.runtime.sendMessage({
+              type: "css:text",
+            });
+
+            if (
+              response?.ok === true &&
+              typeof response.css === "string" &&
+              response.css.length > 0
+            ) {
+              return response.css;
+            }
+          } catch (error) {
+            logModule.warn("No se pudo pedir el CSS:", error);
+          }
+
+          throw new Error("CSS no disponible");
+        })();
       }
 
-      return fallbackCssPromise;
+      return cssTextPromise;
     }
 
-    async function setFallbackCss(enabled) {
-      if (!enabled) {
-        fallbackStyle?.remove();
-        fallbackStyle = null;
+    function removeAdoptedCss() {
+      if (!adoptedStyleSheet) return;
+
+      document.adoptedStyleSheets = document.adoptedStyleSheets.filter(
+        (sheet) => sheet !== adoptedStyleSheet,
+      );
+      adoptedStyleSheet = null;
+    }
+
+    async function adoptCss() {
+      if (
+        adoptedStyleSheet &&
+        document.adoptedStyleSheets.includes(adoptedStyleSheet)
+      ) {
         return true;
       }
 
-      if (fallbackStyle?.isConnected) return true;
-
-      try {
-        const css = await loadFallbackCss();
-        fallbackStyle =
-          document.getElementById("__andypsx-live-style") ??
-          document.createElement("style");
-        fallbackStyle.id = "__andypsx-live-style";
-        fallbackStyle.textContent = css;
-        (document.head ?? document.documentElement).append(fallbackStyle);
-        return true;
-      } catch (error) {
-        console.warn("[andypsx-live] No se pudo aplicar CSS local:", error);
+      if (
+        !("adoptedStyleSheets" in document) ||
+        typeof CSSStyleSheet !== "function"
+      ) {
         return false;
       }
+
+      try {
+        const css = await getCssText();
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync(css);
+        document.adoptedStyleSheets = [
+          ...document.adoptedStyleSheets,
+          sheet,
+        ];
+        adoptedStyleSheet = sheet;
+        logModule.log("Hoja de estilos adoptada aplicada.");
+        return true;
+      } catch (error) {
+        logModule.error("No se pudo aplicar el CSS adoptado:", error);
+        return false;
+      }
+    }
+
+    async function requestCssEnsure() {
+      try {
+        const response = await chrome.runtime.sendMessage({
+          type: "css:ensure",
+          targetOrigin: config.TARGET_ORIGIN,
+        });
+        return response?.ok === true;
+      } catch (error) {
+        logModule.warn("No se pudo confirmar el CSS:", error);
+        return false;
+      }
+    }
+
+    function backoffDelay(failures) {
+      return Math.min(1000 * 2 ** Math.max(0, failures - 1), 4000);
     }
 
     async function ensureCssState() {
@@ -160,27 +217,49 @@
       if (applied === null) return;
 
       const desired = states["vista-limpia"]?.enabled === true;
-      if (applied === desired) return;
+
+      if (applied === desired) {
+        cssFailureCount = 0;
+        if (!desired) removeAdoptedCss();
+        return;
+      }
+
+      if (!desired) {
+        removeAdoptedCss();
+        await requestCssEnsure();
+        return;
+      }
 
       const now = Date.now();
-      if (now - lastCssSyncAt < 2000) return;
-      lastCssSyncAt = now;
+      if (now < nextCssAttemptAt) return;
 
-      console.log(
-        `[andypsx-live] Vista limpia no coincide (deseada: ${desired}, aplicada: ${applied}); ${
-          desired ? "aplicando CSS local" : "quitando CSS local"
-        }.`,
+      logModule.log(
+        `Vista limpia no coincide (deseada: true, aplicada: false); comprobando CSS.`,
       );
 
-      await setFallbackCss(desired);
+      const confirmed = await requestCssEnsure();
+      await new Promise((resolve) => window.setTimeout(resolve, 200));
 
-      try {
-        await chrome.runtime.sendMessage({
-          type: "modules:sync",
-          targetOrigin: config.TARGET_ORIGIN,
-        });
-      } catch (error) {
-        console.debug("[andypsx-live] No se pudo pedir resync:", error);
+      if (isCleanViewApplied() === true) {
+        cssFailureCount = 0;
+        return;
+      }
+
+      cssFailureCount += 1;
+      const waitMs = backoffDelay(cssFailureCount);
+      nextCssAttemptAt = Date.now() + waitMs;
+
+      logModule.log(
+        `CSS no aplicado${confirmed ? " tras confirmación" : ""}; reintento ${cssFailureCount}/3 en ${waitMs} ms.`,
+      );
+
+      if (cssFailureCount >= 3) {
+        const adopted = await adoptCss();
+        logModule.log(
+          adopted
+            ? "CSS adoptado como último recurso."
+            : "No se pudo aplicar el CSS adoptado.",
+        );
       }
     }
 
@@ -211,7 +290,7 @@
       queue = queue
         .then(runSync)
         .catch((error) =>
-          console.error("[andypsx-live] No se pudo sincronizar la página:", error),
+          logModule.error("No se pudo sincronizar la página:", error),
         );
     }
 
@@ -235,8 +314,8 @@
         .then(scheduleSync)
         .then(ensureCssState)
         .catch((error) =>
-          console.error(
-            "[andypsx-live] No se pudo leer la configuración de módulos:",
+          logModule.error(
+            "No se pudo leer la configuración de módulos:",
             error,
           ),
         );
@@ -250,9 +329,6 @@
   }
 
   run().catch((error) => {
-    console.error(
-      "[andypsx-live] No se pudo iniciar el content script:",
-      error,
-    );
+    console.error("Extension:", error);
   });
 })();

@@ -1,5 +1,6 @@
-import { TARGET_ORIGIN, isTargetUrl } from "./core/config.js";
+import { CSS_CACHE_KEY, TARGET_ORIGIN, isTargetUrl } from "./core/config.js";
 import { syncTab } from "./core/css.js";
+import { debug, error, initLogger, warn } from "./core/log.js";
 import {
   applySessionGate,
   defaultSession,
@@ -18,11 +19,51 @@ const modules = (Array.isArray(rawModules) ? rawModules : []).filter(
 );
 
 const sessionKnownTabs = new Set();
+const MAX_CLICK_MOVES = 12;
+const MAX_CLICK_DELAY_MS = 1000;
 let ready = Promise.resolve();
 let reloadingForTargetMismatch = false;
+let cssTextPromise = null;
 
-function logError(message, error) {
-  console.error(`[andypsx-live] ${message}`, error);
+function logError(message, detail) {
+  error(message, detail);
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+async function getCssText() {
+  if (!cssTextPromise) {
+    cssTextPromise = (async () => {
+      try {
+        const response = await fetch(
+          chrome.runtime.getURL("modules/vista-limpia/live.css"),
+        );
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        const css = await response.text();
+        await chrome.storage.local.set({ [CSS_CACHE_KEY]: css });
+        return css;
+      } catch (error) {
+        const stored = await chrome.storage.local.get(CSS_CACHE_KEY);
+
+        if (
+          typeof stored[CSS_CACHE_KEY] === "string" &&
+          stored[CSS_CACHE_KEY].length > 0
+        ) {
+          return stored[CSS_CACHE_KEY];
+        }
+
+        throw error;
+      }
+    })();
+  }
+
+  return cssTextPromise;
 }
 
 function reportedTargetOrigin(message, url) {
@@ -48,8 +89,8 @@ function reloadForTargetMismatch(origin) {
   if (reloadingForTargetMismatch) return;
   reloadingForTargetMismatch = true;
 
-  console.warn(
-    `[andypsx-live] Target distinto (${origin} vs ${TARGET_ORIGIN}); recargando extensión.`,
+  warn(
+    `Target distinto (${origin} vs ${TARGET_ORIGIN}); recargando extensión.`,
   );
 
   setTimeout(() => {
@@ -60,6 +101,141 @@ function reloadForTargetMismatch(origin) {
       logError("No se pudo recargar la extensión", error);
     }
   }, 50);
+}
+
+function finiteNumber(value) {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function clampDelay(value, fallback) {
+  return finiteNumber(value)
+    ? Math.max(0, Math.min(value, MAX_CLICK_DELAY_MS))
+    : fallback;
+}
+
+function sanitizeMoves(moves) {
+  if (
+    !Array.isArray(moves) ||
+    moves.length === 0 ||
+    moves.length > MAX_CLICK_MOVES
+  ) {
+    return null;
+  }
+
+  const sanitized = [];
+
+  for (const move of moves) {
+    if (!move || !finiteNumber(move.x) || !finiteNumber(move.y)) {
+      return null;
+    }
+
+    sanitized.push({
+      x: Math.round(move.x),
+      y: Math.round(move.y),
+      waitMs: clampDelay(move.waitMs, 0),
+    });
+  }
+
+  return sanitized;
+}
+
+async function handleTrustedClick(message, sender) {
+  const tabId = sender.tab?.id;
+  const url = sender.tab?.url;
+  const origin = reportedTargetOrigin(message, url);
+
+  if (origin && origin !== TARGET_ORIGIN) {
+    reloadForTargetMismatch(origin);
+    return { ok: false, error: "target-mismatch" };
+  }
+
+  if (typeof tabId !== "number" || !isTargetUrl(url)) {
+    return { ok: false, error: "not-target" };
+  }
+
+  const moves = sanitizeMoves(message.moves);
+
+  if (!moves || !finiteNumber(message.targetX) || !finiteNumber(message.targetY)) {
+    return { ok: false, error: "invalid-click" };
+  }
+
+  const target = {
+    x: Math.round(message.targetX),
+    y: Math.round(message.targetY),
+  };
+  const hoverWaitMs = clampDelay(message.hoverWaitMs, 80);
+  const pressWaitMs = clampDelay(message.pressWaitMs, 100);
+  const releaseWaitMs = clampDelay(message.releaseWaitMs, 50);
+
+  try {
+    await chrome.debugger.attach({ tabId }, "1.3");
+  } catch (error) {
+    return {
+      ok: false,
+      error: `No se pudo adjuntar debugger: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    };
+  }
+
+  try {
+    for (const move of moves) {
+      await chrome.debugger.sendCommand(
+        { tabId },
+        "Input.dispatchMouseEvent",
+        {
+          type: "mouseMoved",
+          x: move.x,
+          y: move.y,
+          button: "none",
+          buttons: 0,
+        },
+      );
+      await delay(move.waitMs);
+    }
+
+    await delay(hoverWaitMs);
+
+    await chrome.debugger.sendCommand(
+      { tabId },
+      "Input.dispatchMouseEvent",
+      {
+        type: "mousePressed",
+        x: target.x,
+        y: target.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      },
+    );
+
+    await delay(pressWaitMs);
+
+    await chrome.debugger.sendCommand(
+      { tabId },
+      "Input.dispatchMouseEvent",
+      {
+        type: "mouseReleased",
+        x: target.x,
+        y: target.y,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      },
+    );
+
+    await delay(releaseWaitMs);
+    return { ok: true };
+  } catch (error) {
+    return {
+      ok: false,
+      error: `No se pudo hacer el clic: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    };
+  } finally {
+    await chrome.debugger.detach({ tabId }).catch(() => {});
+  }
 }
 
 async function getGlobalStates() {
@@ -106,8 +282,8 @@ async function getStatesForTab(tabId) {
 
 async function injectSessionProbe(tabId) {
   try {
-    console.log(
-      `[andypsx-live] Sesión no disponible; inyectando probe en pestaña ${tabId}.`,
+    debug(
+      `Sesión no disponible; inyectando probe en pestaña ${tabId}.`,
     );
     await chrome.scripting.executeScript({
       target: { tabId },
@@ -253,6 +429,59 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === "css:ensure") {
+    const tabId = sender.tab?.id;
+    const url = sender.tab?.url;
+    const origin = reportedTargetOrigin(message, url);
+
+    if (origin && origin !== TARGET_ORIGIN) {
+      reloadForTargetMismatch(origin);
+      sendResponse({ ok: false, error: "target-mismatch" });
+      return true;
+    }
+
+    if (typeof tabId !== "number" || !isTargetUrl(url)) {
+      sendResponse({ ok: false, error: "not-target" });
+      return false;
+    }
+
+    sessionKnownTabs.add(tabId);
+
+    syncTab(
+      tabId,
+      url,
+      () => getStatesForTab(tabId),
+      modules,
+    )
+      .then((inserted) => sendResponse({ ok: inserted === true }))
+      .catch((error) => {
+        logError("No se pudo confirmar el CSS", error);
+        sendResponse({ ok: false, error: String(error) });
+      });
+
+    return true;
+  }
+
+  if (message?.type === "css:text") {
+    getCssText()
+      .then((css) => sendResponse({ ok: true, css }))
+      .catch((error) => {
+        logError("No se pudo leer el CSS", error);
+        sendResponse({ ok: false, error: String(error) });
+      });
+    return true;
+  }
+
+  if (message?.type === "trusted-click") {
+    handleTrustedClick(message, sender)
+      .then((result) => sendResponse(result))
+      .catch((error) => {
+        logError("No se pudo hacer el clic confiable", error);
+        sendResponse({ ok: false, error: String(error) });
+      });
+    return true;
+  }
+
   if (message?.type !== "session:update") return false;
 
   const tabId = sender.tab?.id;
@@ -295,5 +524,10 @@ watchModuleStates(() => {
 watchSession(() => {
   void restart();
 });
+
+void initLogger();
+void getCssText().catch((error) =>
+  logError("No se pudo preparar el CSS de respaldo", error),
+);
 
 ready = restart();

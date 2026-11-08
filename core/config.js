@@ -35,6 +35,9 @@ export const STORAGE_KEYS = Object.freeze({
   modules: "modules",
 });
 
+export const DEBUG_KEY = "debug";
+export const CSS_CACHE_KEY = "styleSource";
+
 // Clave antigua (v1.0.x). Se migra a modules.vista-limpia.enabled.
 export const LEGACY_STORAGE_KEY = "andypsxLiveEnabled";
 

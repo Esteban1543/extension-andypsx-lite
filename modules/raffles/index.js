@@ -6,4 +6,7 @@ export const definition = {
   matches: ["/*"],
   defaultEnabled: true,
   hasContent: true,
+  defaultSettings: {
+    trustedClicks: false,
+  },
 };

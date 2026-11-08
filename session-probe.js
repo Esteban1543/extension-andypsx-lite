@@ -1,5 +1,5 @@
 (() => {
-  const FLAG = "__andypsxLiveSessionProbe";
+  const FLAG = "__extSessionProbe";
   if (globalThis[FLAG]) return;
   globalThis[FLAG] = true;
 
@@ -7,22 +7,25 @@
     const config = await import(chrome.runtime.getURL("core/config.js"));
     if (!config.isTargetPage(location.href)) return;
 
+    const [logModule, session] = await Promise.all([
+      import(chrome.runtime.getURL("core/log.js")),
+      import(chrome.runtime.getURL("core/session.js")),
+    ]);
+
+    await logModule.initLogger();
+
     chrome.runtime.onMessage.addListener((message) => {
       if (message?.type === "css:error") {
-        console.error("[andypsx-live] Error al insertar CSS:", message.detail);
+        logModule.warn("No se pudo insertar CSS:", message.detail);
       }
     });
 
-    const session = await import(chrome.runtime.getURL("core/session.js"));
     session.startSessionWatcher({
       shouldCheck: () => config.isTargetPage(location.href),
     });
   }
 
   run().catch((error) => {
-    console.error(
-      "[andypsx-live] No se pudo iniciar session-probe:",
-      error,
-    );
+    console.error("Extension:", error);
   });
 })();

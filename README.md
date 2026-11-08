@@ -88,6 +88,7 @@ andypsx-extension/
 │   ├── bus.js                 ← eventos locales entre módulos de contenido
 │   ├── registry.js            ← monta/desmonta content.js por módulo
 │   ├── session.js             ← detecta y guarda el estado de sesión
+│   ├── log.js                 ← logs condicionados por debug
 │   └── actions.js             ← esperas, botón y clic humano
 ├── modules/
 │   ├── index.js               ← registro de módulos
@@ -197,10 +198,10 @@ sesión, o abre `https://andypsx.com/live` en un navegador sin cookies.
 - `Sesión sin comprobar`: el content script de la pestaña no responde. El
   background intenta inyectar `session-probe.js`. Si sigue igual, usa
   **Recargar página** en el popup.
-- `Vista limpia no coincide ... aplicando CSS local`: el background no está
-  aplicando el CSS. El content script aplica un CSS local de respaldo. Si sigue
-  igual, revisa que la pestaña actual sea la página objetivo. Si el target
-  cambió, el background recarga la extensión automáticamente.
+- `Vista limpia no coincide ... comprobando CSS`: el background no está
+  aplicando el CSS. El content script reintenta y, tras 3 fallos, usa una hoja
+  adoptada. Si sigue igual, revisa que la pestaña actual sea la página objetivo.
+  Si el target cambió, el background recarga la extensión automáticamente.
 - `[andypsx-live] Error al insertar CSS`: `insertCSS` falló. Revisa la ruta del
   CSS y los permisos del manifest.
 - Si tras recargar extensión y página sigue igual, revisa que no haya otra copia
@@ -273,10 +274,13 @@ sesión, o abre `https://andypsx.com/live` en un navegador sin cookies.
   inyecta `session-probe.js` para no obligar a recargar la página.
 - Si el popup detecta sesión sin comprobar, muestra “Sesión sin comprobar” y un
   botón para recargar la página.
-- `content.js` compara el CSS aplicado con el estado deseado. Si no coincide,
-  aplica un `<style>` local con `modules/vista-limpia/live.css` y pide
-  `modules:sync` al background.
-- Si el background no responde, el CSS local mantiene Vista limpia funcionando.
+- `content.js` compara el CSS aplicado con el estado deseado. Pide confirmación
+  al background (`css:ensure`) con reintentos 1 s, 2 s, 4 s.
+- Tras 3 fallos confirmados o background inalcanzable, aplica una hoja
+  `CSSStyleSheet` adoptada con el CSS cacheado. No crea nodos `<style>` ni
+  `<link>` en el DOM.
+- Si el background no responde, la hoja adoptada mantiene Vista limpia
+  funcionando.
 - Si no se puede comprobar la sesión, Vista limpia queda apagada.
 - El login de la cabecera y el login de Kick no cuentan.
 
@@ -398,11 +402,98 @@ background y el popup lo bloquearán cuando la tarjeta **Tu directo** muestre
 
 ---
 
-## 8. Empaquetar
+## 8. Detectabilidad y privacidad
+
+### P1 — Sin nodos `<style>` / `<link>`
+
+El fallback ya no crea `<style id="...">`. Usa `CSSStyleSheet` +
+`document.adoptedStyleSheets`, que no añade nodos al DOM. Antes de usarlo pide
+confirmación al background con `css:ensure` y reintenta 1 s, 2 s, 4 s. Solo
+adopta la hoja tras 3 fallos confirmados o si el background no responde.
+
+### P2 — Sin atributos `data-*`
+
+El módulo Raffles guarda `id`, `delayMs`, `clicked` y `skipped` en memoria
+(`WeakMap`). No escribe atributos en las tarjetas del sitio.
+
+### P3 — Clics confiables opcionales
+
+Por defecto:
+
+```json
+"trustedClicks": false
+```
+
+En ese modo se mantiene el clic sintético actual. Los eventos tienen
+`isTrusted === false`; la página puede detectarlo.
+
+Para usar clics trusted, activa el ajuste desde la consola del service worker:
+
+```js
+chrome.storage.sync.get("modules").then(({ modules = {} }) => {
+  const raffles = modules.raffles ?? {};
+  chrome.storage.sync.set({
+    modules: {
+      ...modules,
+      raffles: {
+        ...raffles,
+        settings: { ...(raffles.settings ?? {}), trustedClicks: true },
+      },
+    },
+  });
+});
+```
+
+Luego apaga/enciende Raffles o recarga la página. Con `trustedClicks: true` el
+background usa `chrome.debugger` + `Input.dispatchMouseEvent` y adjunta el
+debugger solo durante el clic.
+
+Trade-offs:
+
+- El permiso `debugger` muestra una advertencia al instalar.
+- Mientras el debugger está adjunto aparece la barra “Chrome está siendo
+  controlado por software de prueba”.
+- Si DevTools está abierto en la pestaña, `chrome.debugger.attach` puede fallar
+  y el raffle se omite.
+- En Playwright puede fallar si el debugger de la pestaña ya está adjunto; en
+  la prueba de aceptación de este repo el clic trusted funcionó.
+
+### P4 — CSS fuera de `web_accessible_resources`
+
+`modules/*/*.css` ya no está expuesto. La página no puede hacer
+`fetch('chrome-extension://<id>/modules/vista-limpia/live.css')`.
+
+Los JS (`core/*.js`, `modules/*/content.js`, etc.) siguen en
+`web_accessible_resources` porque el content script los importa dinámicamente.
+Conociendo el ID de la extensión, la página puede enumerarlos. No exponen
+secretos, pero sí revelan que hay una extensión.
+
+### P5 — Riesgo aceptado
+
+La función es visible por definición: `header[data-cabecera-sitio]` y `footer`
+en `display:none`, la barra lateral en 5 columnas, etc. Son detectables con
+`getComputedStyle` y `getBoundingClientRect`. No hay mitigación real sin
+eliminar Vista limpia.
+
+### P6 — Higiene
+
+- Sin `__andypsx*`, `data-andypsx*` ni IDs con el nombre del proyecto en el DOM.
+- Los logs informativos están detrás de `debug`:
+  ```js
+  chrome.storage.local.set({ debug: true });
+  ```
+  Recarga la extensión/página para aplicarlo. Sin `debug`, no se imprimen logs
+  informativos.
+- El content script sigue en mundo aislado (`world` no se toca).
+- No se crean globales en `window`.
+
+---
+
+## 9. Empaquetar
 
 ```bash
 cd /home/manager/Downloads
-zip -r andypsx-extension-v1.3.4.zip andypsx-extension-v1.0.4 \
+zip -r andypsx-extension-v1.4.0.zip andypsx-extension-v1.0.4 \
   -x '*/.git/*' '*/__pycache__/*'
 ```
 

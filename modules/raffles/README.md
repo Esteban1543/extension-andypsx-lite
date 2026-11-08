@@ -19,7 +19,7 @@ clic humano.
 
 No se pulsa `Participar` si:
 
-- el raffle tiene contraseña → `data-andypsx-raffle-skipped="password-required"`;
+- el raffle tiene contraseña → `skipped: "password-required"`;
 - ya aparece como participado → `already`;
 - no hay botón → `no-button`;
 - el botón está deshabilitado → `button-disabled`;
@@ -52,7 +52,7 @@ Las constantes están al inicio de `content.js`.
 
 ## Clic humano
 
-`core/actions.js` hace:
+Por defecto (`trustedClicks: false`), `core/actions.js` hace:
 
 1. `scrollIntoView` al centro.
 2. Pausa aleatoria de 200–500 ms.
@@ -69,23 +69,52 @@ Las constantes están al inicio de `content.js`.
 Los eventos llevan coordenadas del botón, `button`, `buttons`, `view` y
 `pointerType: "mouse"`.
 
-**Límite:** un content script no puede generar eventos con
-`event.isTrusted = true`. Si el sitio exigiera eventos confiables, habría que
-usar `chrome.debugger` con CDP.
+**Límite:** ningún evento sintético tiene `event.isTrusted === true`. La página
+puede detectarlo.
 
-## Marcas en el DOM
+Con `trustedClicks: true`, el content script envía el plan de movimiento al
+background y el background usa `chrome.debugger` +
+`Input.dispatchMouseEvent` para generar un clic trusted real. El debugger se
+adjunta solo durante el clic y se desadjunta al terminar. Trade-offs:
 
-```html
-data-andypsx-raffle="raffle-1"
-data-andypsx-raffle-delay-ms="7341"
-data-andypsx-raffle-clicked="true"
-data-andypsx-raffle-skipped="password-required|already|no-button|button-disabled|not-clickable|error"
+- Permiso `debugger` con advertencia al instalar.
+- Barra “Chrome está siendo controlado por software de prueba” mientras está
+  adjunto.
+- DevTools abierto puede impedir `chrome.debugger.attach`.
+
+Cómo activarlo:
+
+```js
+chrome.storage.sync.get("modules").then(({ modules = {} }) => {
+  const raffles = modules.raffles ?? {};
+  chrome.storage.sync.set({
+    modules: {
+      ...modules,
+      raffles: {
+        ...raffles,
+        settings: { ...(raffles.settings ?? {}), trustedClicks: true },
+      },
+    },
+  });
+});
 ```
 
-`data-andypsx-raffle-delay-ms` guarda la espera elegida antes del clic. Sirve
-para verificar el comportamiento.
+## Estado en memoria
 
-Al desactivar el módulo se eliminan todas las marcas y se detiene la cola.
+No se escriben atributos `data-*` en el DOM. Cada tarjeta tiene un registro en
+memoria:
+
+```js
+{
+  id: "r1",
+  delayMs: 7341,
+  clicked: true,
+  skipped: null
+}
+```
+
+Ese estado se usa para logs y para el evento `raffles:clicked`. Al desactivar el
+módulo se detiene la cola y se descarta el estado.
 
 ## Eventos del bus
 
@@ -96,7 +125,7 @@ ctx.bus.emit("raffles:snapshot", {
   count: 1,
   raffles: [
     {
-      id: "raffle-1",
+      id: "r1",
       title: "Raffle 5 × $5",
       subtitle: "5 × $5 · Tip en Gamdom",
       requirements: ["Solo verificados"],
@@ -114,21 +143,28 @@ Después de cada clic:
 
 ```js
 ctx.bus.emit("raffles:clicked", {
-  id: "raffle-1",
+  id: "r1",
   title: "Raffle 5 × $5",
   at: 1730000000000,
   delayMs: 7341,
+  trusted: false,
 });
 ```
 
 ## Logs
+
+Los logs están detrás del flag `debug`:
+
+```js
+chrome.storage.local.set({ debug: true });
+```
 
 ```text
 [raffles] Raffles activos: 3.
 [raffles] Detectado: SOLO ANDY SORTEO 10$ CASH - 30 GANADORES
 [raffles] Raffle omitido, requiere contraseña: SOLO ANDY SORTEO 10$ CASH...
 [raffles] Esperando 7.3s antes de participar: Raffle 5 × $5
-[raffles] Clic humano en Participar: Raffle 5 × $5
+[raffles] Clic en Participar: Raffle 5 × $5
 ```
 
 ## Prueba local
