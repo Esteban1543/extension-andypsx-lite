@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AndyPSX Live · Vista Limpia</title>
+  <link rel="stylesheet" href="../ui/theme.css">
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="box">
+    <div class="titulo-row">
+      <div class="titulo">AndyPSX Live</div>
+      <div id="version" class="version"></div>
+    </div>
+    <div class="subtitulo">Vista limpia + raffles</div>
+
+    <div class="target">
+      <span class="target-label">Página objetivo</span>
+      <span id="target-url" class="target-url">Cargando...</span>
+      <span id="target-mode" class="target-mode"></span>
+      <span id="session-state" class="session-state" data-tone="neutral">Comprobando sesión...</span>
+      <span id="current-url" class="current-url"></span>
+      <div class="target-actions">
+        <button id="open-target" class="link-button" type="button">Abrir página objetivo</button>
+        <button id="reload-page" class="link-button" type="button" hidden>Recargar página</button>
+      </div>
+    </div>
+
+    <p id="status" class="status" role="status" hidden></p>
+    <ul id="module-list" class="module-list"></ul>
+
+    <div class="leyenda">Cambios instantáneos · se guardan al cerrar el navegador</div>
+  </div>
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

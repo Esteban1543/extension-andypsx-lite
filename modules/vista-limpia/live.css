@@ -1,0 +1,402 @@
+/* ============================================================================
+   andy-edit · andypsx.com/live
+   Layout limpio: RAFLES · CAJAS · APUESTAS · GUESSES
+
+   ESTRATEGIA DE SELECTORES (de más fuerte a más débil):
+     1. aria-label / aria-labelledby  → semántico, difícil que cambie
+     2. id                            → estable por definición
+     3. data-* attributes             → explícito del sitio
+     4. :has() con contenido semántico → selecciona por contexto, no posición
+     5. Clases Tailwind               → último recurso, más frágil
+     6. :nth-child / :last-child      → evitar si hay alternativa
+
+   Cada regla frágil tiene un fallback alternativo.
+   ============================================================================ */
+
+/* ─── 1. OCULTAR: cabecera, título, pie, directo, hunt, soporte, "Tu directo" */
+
+/* Cabecera del sitio (fuerte: data attribute) */
+header[data-cabecera-sitio],
+
+/* Contenedor sticky de la cabecera (fuerte: :has + data attribute) */
+:has(> header[data-cabecera-sitio]),
+
+/* Primer hijo directo de main (frágil: fallback con :has de footer) */
+main > div:first-child,
+main > :has(> footer),
+
+/* Pie de página (fuerte: tag semántico) */
+footer,
+
+/* Sección de soporte (fuerte: id) */
+main > section#soporte,
+
+/* "Tu cuenta del directo" dentro del aside (fuerte: aria-label) */
+aside[aria-label="Participa en el directo"] section[aria-label="Tu cuenta del directo"],
+
+/* Promo de extensión (fuerte: aria-labelledby) */
+[aria-labelledby="promo-extension-titulo"],
+
+/* Columna izquierda del grid de 272px (frágil: clase Tailwind)
+   FALLBACK: cualquier div hermano del aside que no sea el aside mismo */
+div[class*="lg:grid-cols-[minmax(0,1fr)_272px]"] > div:nth-child(1),
+div[class*="lg:grid-cols-[minmax(0,1fr)_272px]"] > :not(aside):nth-child(1),
+
+/* Columna derecha / tercer elemento (frágil: clase Tailwind)
+   FALLBACK: :has con footer o contenido no-relacionado */
+div[class*="lg:grid-cols-[minmax(0,1fr)_272px]"] > div:nth-child(3),
+div[class*="lg:grid-cols-[minmax(0,1fr)_272px]"] > :has(> footer) {
+  display: none !important;
+}
+
+/* ─── 2. ORDEN de los paneles (1 RAFLES · 2 CAJAS · 3 APUESTAS · 4 GUESSES) */
+
+/* Todos usan aria-label — muy estables */
+aside[aria-label="Participa en el directo"] > section[aria-label^="Raffle:"],
+aside[aria-label="Participa en el directo"] > section[aria-label^="Free spins"] {
+  order: 1 !important;
+}
+aside[aria-label="Participa en el directo"] > section#cajas-en-directo {
+  order: 2 !important;
+}
+aside[aria-label="Participa en el directo"] > section[aria-label^="Apuesta:"] {
+  order: 3 !important;
+}
+aside[aria-label="Participa en el directo"] > section[aria-label^="Guess:"] {
+  order: 4 !important;
+}
+
+/* ─── 3. LIBERAR LA BARRA LATERAL (la web le reserva 272px) ───────────────── */
+
+/* Contenedor grid principal (frágil: clase Tailwind)
+   FALLBACK: padre directo del aside de participación */
+@media (min-width: 1024px) {
+  div[class*="lg:grid-cols-[minmax(0,1fr)_272px]"],
+  :has(> aside[aria-label="Participa en el directo"]) {
+    grid-template-columns: minmax(0, 1fr) !important;
+    grid-template-rows: auto !important;
+  }
+
+  div[class*="lg:grid-cols-[minmax(0,1fr)_272px]"] > aside,
+  :has(> aside[aria-label="Participa en el directo"]) > aside[aria-label="Participa en el directo"] {
+    grid-column: 1 !important;
+    grid-row: 1 !important;
+  }
+
+  div[class*="lg:grid-cols-[minmax(0,1fr)_272px]"] > div:nth-child(3),
+  :has(> aside[aria-label="Participa en el directo"]) > :has(> footer) {
+    grid-column: 1 !important;
+  }
+
+  main {
+    padding-top: 24px !important;
+  }
+}
+
+/* ─── 4. REJILLA DE 5 COLUMNAS FIJAS (≥1200px) ───────────────────────────── */
+
+@media (min-width: 1200px) {
+  aside[aria-label="Participa en el directo"] {
+    display: block !important;
+    position: relative !important;
+    --gap: 14px;
+    --col: calc((100% - 4 * var(--gap)) / 5);
+    max-width: none !important;
+    width: 100% !important;
+    margin-inline: 0 !important;
+  }
+
+  main {
+    max-width: none !important;
+    padding-inline: 24px !important;
+  }
+
+  /* ── RAFFLES: apilados, con separación fija, todos visibles ─────────── */
+  aside[aria-label="Participa en el directo"] > section[aria-label^="Raffle:"],
+  aside[aria-label="Participa en el directo"] > section[aria-label^="Free spins"] {
+    width: var(--col) !important;
+    margin-bottom: var(--gap) !important;
+    align-self: auto !important;
+  }
+  aside[aria-label="Participa en el directo"]
+    > section[aria-label^="Raffle:"]:last-of-type,
+  aside[aria-label="Participa en el directo"]
+    > section[aria-label^="Free spins"]:last-of-type {
+    margin-bottom: 0 !important;
+  }
+
+  /* ── CAJAS (columna 2+3) — fuerte: id ───────────────────────────────── */
+  aside[aria-label="Participa en el directo"] > section#cajas-en-directo {
+    position: absolute !important;
+    top: 0 !important;
+    left: calc(var(--col) + var(--gap)) !important;
+    width: calc(2 * var(--col) + var(--gap)) !important;
+  }
+
+  /* ── APUESTAS (columna 4) — fuerte: aria-label prefix ───────────────── */
+  aside[aria-label="Participa en el directo"] > section[aria-label^="Apuesta:"] {
+    position: absolute !important;
+    top: 0 !important;
+    left: calc(3 * var(--col) + 3 * var(--gap)) !important;
+    width: var(--col) !important;
+  }
+
+  /* ── GUESS (columna 5) — fuerte: aria-label prefix ──────────────────── */
+  aside[aria-label="Participa en el directo"] > section[aria-label^="Guess:"] {
+    position: absolute !important;
+    top: 0 !important;
+    left: calc(4 * var(--col) + 4 * var(--gap)) !important;
+    width: var(--col) !important;
+  }
+
+  /* ── HUECOS RESERVADOS (si falta raffle o guess) ────────────────────── */
+  aside[aria-label="Participa en el directo"]::before,
+  aside[aria-label="Participa en el directo"]::after {
+    position: absolute !important;
+    top: 0 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    min-height: 240px !important;
+    border: 1px dashed #343a56 !important;
+    border-radius: 13px !important;
+    background: rgba(30, 32, 47, .35) !important;
+    color: #4c5478 !important;
+    font: 700 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace !important;
+    letter-spacing: .14em !important;
+  }
+
+  aside[aria-label="Participa en el directo"]:not(:has(section[aria-label^="Raffle:"]))::before {
+    content: "RAFLES" !important;
+    left: 0 !important;
+    width: var(--col) !important;
+  }
+
+  aside[aria-label="Participa en el directo"]:not(:has(section[aria-label^="Guess:"]))::after {
+    content: "GUESSES" !important;
+    left: calc(4 * var(--col) + 4 * var(--gap)) !important;
+    width: var(--col) !important;
+  }
+}
+
+/* ─── 5. CAJAS: VIEWER (No Subs) a la izquierda · SUBS a la derecha ───────── */
+
+/* Fuerte: id + role */
+section#cajas-en-directo > div[role="group"] {
+  display: grid !important;
+  grid-template-columns: 1fr 1fr !important;
+  gap: 10px !important;
+  background: transparent !important;
+  height: auto !important;
+  overflow: visible !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+}
+
+section#cajas-en-directo > div[role="group"] > button {
+  height: 44px !important;
+  width: 100% !important;
+  border-radius: 10px !important;
+  border: 1px solid #2a2c3f !important;
+  background: #181a27 !important;
+  color: #b1b6c6 !important;
+}
+
+section#cajas-en-directo > div[role="group"] > button[aria-pressed="true"] {
+  background: #2a2c3f !important;
+  border-color: #4bbafd !important;
+  color: #fff !important;
+}
+
+/* ─── 5b. "GANADORES DEL SORTEO" FLOTA ENCIMA (no estira la fila) ───────────
+
+   PROBLEMA ORIGINAL: :last-child > :last-child es frágil.
+   Si la web añade un div hermano, apunta al elemento equivocado.
+
+   SOLUCIÓN: usar :has() para identificar el contenedor por SU CONTENIDO
+   en lugar de su posición. El desplegable de ganadores contiene una lista
+   con "Ganadores" o participantes.
+
+   ESTRUCTURA ACTUAL:
+     section#cajas-en-directo
+       └ div[role="group"]        ← botones viewer/subs
+       └ div (contenedor ganador) ← ESTE es el que queremos
+           └ button (toggle)
+           └ div (lista con scroll)
+               └ ul > li (participantes)
+
+   SELECTOR MEJORADO: el div hijo de #cajas-en-directo que NO tiene role="group"
+   → así no importa si añaden más hermanos antes o después.
+   ------------------------------------------------------------------------ */
+
+/* Contenedor del desplegable: hijo de #cajas-en-directo que NO es el group */
+section#cajas-en-directo > div:not([role="group"]):has(> button) {
+  position: relative !important;
+}
+
+/* FALLBACK por si la estructura cambia y todos los hijos son divs genéricos:
+   el que contiene un <ul> con participantes */
+section#cajas-en-directo > div:has(> ul li) {
+  position: relative !important;
+}
+
+/* La lista de ganadores: dentro del contenedor que NO es group,
+   el div que contiene la lista con scroll */
+section#cajas-en-directo > div:not([role="group"]):has(> button) > div:has(> ul),
+section#cajas-en-directo > div:not([role="group"]):has(> button) > div:last-child {
+  position: absolute !important;
+  top: calc(100% + 6px) !important;
+  left: 0 !important;
+  right: 0 !important;
+  z-index: 40 !important;
+  max-height: 46vh !important;
+  overflow-y: auto !important;
+  overscroll-behavior: contain !important;
+  padding: 10px !important;
+  background: #1a1c2b !important;
+  border: 1px solid #2a2c3f !important;
+  border-radius: 12px !important;
+  box-shadow: 0 22px 48px rgba(0, 0, 0, .65) !important;
+  scrollbar-width: thin !important;
+  scrollbar-color: #3a4060 transparent !important;
+}
+
+/* ── barra de scroll fina y oscura (Chrome/Edge/Safari) ──────────────── */
+section#cajas-en-directo > div:not([role="group"]):has(> button) > div:has(> ul)::-webkit-scrollbar,
+section#cajas-en-directo > div:not([role="group"]):has(> button) > div:last-child::-webkit-scrollbar {
+  width: 8px !important;
+  height: 8px !important;
+}
+
+section#cajas-en-directo > div:not([role="group"]):has(> button) > div:has(> ul)::-webkit-scrollbar-track,
+section#cajas-en-directo > div:not([role="group"]):has(> button) > div:last-child::-webkit-scrollbar-track {
+  background: transparent !important;
+  margin: 10px 0 !important;
+}
+
+section#cajas-en-directo > div:not([role="group"]):has(> button) > div:has(> ul)::-webkit-scrollbar-thumb,
+section#cajas-en-directo > div:not([role="group"]):has(> button) > div:last-child::-webkit-scrollbar-thumb {
+  background: #3a4060 !important;
+  border-radius: 8px !important;
+  border: 2px solid transparent !important;
+  background-clip: content-box !important;
+}
+
+section#cajas-en-directo > div:not([role="group"]):has(> button) > div:has(> ul)::-webkit-scrollbar-thumb:hover,
+section#cajas-en-directo > div:not([role="group"]):has(> button) > div:last-child::-webkit-scrollbar-thumb:hover {
+  background: #4bbafd !important;
+  background-clip: content-box !important;
+}
+
+/* la barra tampoco asoma en la lista interior */
+section#cajas-en-directo > div:not([role="group"]):has(> button) > div:has(> ul) > div,
+section#cajas-en-directo > div:not([role="group"]):has(> button) > div:last-child > div {
+  scrollbar-width: thin !important;
+  scrollbar-color: #3a4060 transparent !important;
+}
+
+/* ── 5c. PARTICIPANTES: LOS ÚLTIMOS ARRIBA ────────────────────────────────
+
+   SELECTOR MEJORADO: en lugar de :last-child > :last-child > ul,
+   buscamos el <ul> que está dentro del contenedor que NO es [role="group"].
+   Así no importa cuántos divs hermanos tenga.
+   ------------------------------------------------------------------------ */
+section#cajas-en-directo > div:not([role="group"]):has(> button) ul,
+section#cajas-en-directo > div:has(> ul li) ul {
+  display: flex !important;
+  flex-direction: column-reverse !important;
+}
+
+section#cajas-en-directo > div:not([role="group"]):has(> button) > div:has(> ul) > div::-webkit-scrollbar,
+section#cajas-en-directo > div:not([role="group"]):has(> button) > div:last-child > div::-webkit-scrollbar {
+  width: 6px !important;
+}
+
+section#cajas-en-directo > div:not([role="group"]):has(> button) > div:has(> ul) > div::-webkit-scrollbar-thumb,
+section#cajas-en-directo > div:not([role="group"]):has(> button) > div:last-child > div::-webkit-scrollbar-thumb {
+  background: #3a4060 !important;
+  border-radius: 6px !important;
+}
+
+/* ─── 6. PANTALLAS MEDIANAS 641–1199px: 2 por fila ───────────────────────── */
+@media (min-width: 641px) and (max-width: 1199px) {
+  aside[aria-label="Participa en el directo"] {
+    display: flex !important;
+    flex-flow: row wrap !important;
+    align-items: start !important;
+    justify-content: center !important;
+    gap: 14px !important;
+    max-width: 1200px !important;
+    margin-inline: auto !important;
+  }
+  aside[aria-label="Participa en el directo"] > section {
+    flex: 1 1 45% !important;
+    min-width: 260px !important;
+    max-width: none !important;
+  }
+  aside[aria-label="Participa en el directo"] > section#cajas-en-directo {
+    flex: 1 1 100% !important;
+  }
+
+  /* huecos reservados */
+  aside[aria-label="Participa en el directo"]::before,
+  aside[aria-label="Participa en el directo"]::after {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    flex: 1 1 45% !important;
+    min-height: 160px !important;
+    border: 1px dashed #343a56 !important;
+    border-radius: 13px !important;
+    background: rgba(30, 32, 47, .35) !important;
+    color: #4c5478 !important;
+    font: 700 11px/1 ui-monospace, SFMono-Regular, Menlo, monospace !important;
+    letter-spacing: .14em !important;
+  }
+
+  aside[aria-label="Participa en el directo"]:not(:has(section[aria-label^="Raffle:"]))::before {
+    content: "RAFLES" !important;
+    order: 1 !important;
+  }
+
+  aside[aria-label="Participa en el directo"]:not(:has(section[aria-label^="Guess:"]))::after {
+    content: "GUESSES" !important;
+    order: 4 !important;
+  }
+}
+
+/* ─── 7. MÓVIL ≤640px: una por fila ──────────────────────────────────────── */
+@media (max-width: 640px) {
+  aside[aria-label="Participa en el directo"] {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 14px !important;
+  }
+  aside[aria-label="Participa en el directo"] > section {
+    flex: 1 1 auto !important;
+    max-width: none !important;
+  }
+}
+
+/* ─── 8. SIN DIRECTO: solo hay la tarjeta de aviso → centrada, sin rejilla ── */
+aside[aria-label="Participa en el directo"]:not(:has(section[aria-label^="Raffle:"])):not(:has(section#cajas-en-directo)):not(:has(section[aria-label^="Apuesta:"])):not(:has(section[aria-label^="Guess:"])) {
+  display: flex !important;
+  flex-flow: row wrap !important;
+  justify-content: center !important;
+  align-items: start !important;
+  gap: 14px !important;
+  max-width: 1400px !important;
+  margin-inline: auto !important;
+}
+
+aside[aria-label="Participa en el directo"]:not(:has(section[aria-label^="Raffle:"])):not(:has(section#cajas-en-directo)):not(:has(section[aria-label^="Apuesta:"])):not(:has(section[aria-label^="Guess:"])) > section,
+aside[aria-label="Participa en el directo"]:not(:has(section[aria-label^="Raffle:"])):not(:has(section#cajas-en-directo)):not(:has(section[aria-label^="Apuesta:"])):not(:has(section[aria-label^="Guess:"])) > div {
+  flex: 0 1 420px !important;
+  max-width: 420px !important;
+  min-width: 0 !important;
+}
+
+aside[aria-label="Participa en el directo"]:not(:has(section[aria-label^="Raffle:"])):not(:has(section#cajas-en-directo)):not(:has(section[aria-label^="Apuesta:"])):not(:has(section[aria-label^="Guess:"]))::before,
+aside[aria-label="Participa en el directo"]:not(:has(section[aria-label^="Raffle:"])):not(:has(section#cajas-en-directo)):not(:has(section[aria-label^="Apuesta:"])):not(:has(section[aria-label^="Guess:"]))::after {
+  display: none !important;
+}
