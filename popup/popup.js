@@ -413,7 +413,9 @@ async function readSessionForActiveTab() {
   }
 
   return {
-    session: await getSessionState(tabOrigin ?? undefined),
+    // Solo se filtra por origin si la pestaña activa es un target; si no
+    // (p. ej. el propio popup), vale la sesión guardada de cualquier target.
+    session: await getSessionState(tabIsTarget ? tabOrigin : undefined),
     tabIsTarget,
     tabId,
     tabUrl,
