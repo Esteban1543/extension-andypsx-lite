@@ -193,7 +193,10 @@ export function startSessionWatcher({ onChange, shouldCheck = () => true } = {})
     console.log(`[andypsx-live] Sesión: ${sessionLabel}.`);
 
     try {
-      chrome.runtime.sendMessage({ type: "session:update" }).catch(() => {});
+      chrome.runtime.sendMessage({
+        type: "session:update",
+        targetOrigin: TARGET_ORIGIN,
+      }).catch(() => {});
     } catch {
       // El background puede no estar disponible en ese instante.
     }

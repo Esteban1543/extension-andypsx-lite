@@ -153,6 +153,10 @@ Después de cambiar `ACTIVE_TARGET`:
 1. Recarga la extensión en `chrome://extensions`.
 2. Recarga la página objetivo.
 
+Si cambias el archivo con la extensión ya cargada, el background detecta que el
+target del content script no coincide y recarga la extensión automáticamente.
+Si no lo hace, recarga la extensión a mano.
+
 El manifest ya permite `andypsx.com`, `127.0.0.1` y `localhost`. Los puertos
 locales no hace falta declararlos: `http://127.0.0.1/*` cubre cualquier puerto.
 Si algún día cambias a otro dominio, añádelo a `host_permissions`,
@@ -187,6 +191,19 @@ Abre `http://127.0.0.1:8765/index.html`, enciende los toggles y comprueba:
 Para probar sin sesión, reemplaza el contenido de
 `section[aria-label="Tu cuenta del directo"]` por el estado de la imagen sin
 sesión, o abre `https://andypsx.com/live` en un navegador sin cookies.
+
+### Diagnóstico rápido
+
+- `Sesión sin comprobar`: el content script de la pestaña no responde. El
+  background intenta inyectar `session-probe.js`. Si sigue igual, usa
+  **Recargar página** en el popup.
+- `Vista limpia no coincide ... resincronizando` repetido: el background no está
+  aplicando el CSS. Revisa que la pestaña actual sea la página objetivo. Si el
+  target cambió, el background recarga la extensión automáticamente.
+- `[andypsx-live] Error al insertar CSS`: `insertCSS` falló. Revisa la ruta del
+  CSS y los permisos del manifest.
+- Si tras recargar extensión y página sigue igual, revisa que no haya otra copia
+  de la extensión cargada o Stylus aplicando el mismo CSS.
 
 ---
 
@@ -382,7 +399,7 @@ background y el popup lo bloquearán cuando la tarjeta **Tu directo** muestre
 
 ```bash
 cd /home/manager/Downloads
-zip -r andypsx-extension-v1.3.2.zip andypsx-extension-v1.0.4 \
+zip -r andypsx-extension-v1.3.3.zip andypsx-extension-v1.0.4 \
   -x '*/.git/*' '*/__pycache__/*'
 ```
 

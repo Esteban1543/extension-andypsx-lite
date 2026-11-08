@@ -53,6 +53,12 @@ async function insertCss(tabId, file) {
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     console.debug(`[andypsx-live] No se pudo insertar ${file}:`, detail);
+    chrome.tabs
+      .sendMessage(tabId, {
+        type: "css:error",
+        detail: `No se pudo insertar ${file}: ${detail}`,
+      })
+      .catch(() => {});
   }
 }
 

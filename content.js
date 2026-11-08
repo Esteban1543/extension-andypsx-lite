@@ -77,6 +77,12 @@
       },
     });
 
+    chrome.runtime.onMessage.addListener((message) => {
+      if (message?.type === "css:error") {
+        console.error("[andypsx-live] Error al insertar CSS:", message.detail);
+      }
+    });
+
     async function refreshStates() {
       const token = ++refreshToken;
       const [rawStates, session] = await Promise.all([
@@ -124,7 +130,10 @@
       );
 
       try {
-        await chrome.runtime.sendMessage({ type: "modules:sync" });
+        await chrome.runtime.sendMessage({
+          type: "modules:sync",
+          targetOrigin: config.TARGET_ORIGIN,
+        });
       } catch (error) {
         console.debug("[andypsx-live] No se pudo pedir resync:", error);
       }

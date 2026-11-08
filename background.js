@@ -19,9 +19,47 @@ const modules = (Array.isArray(rawModules) ? rawModules : []).filter(
 
 const sessionKnownTabs = new Set();
 let ready = Promise.resolve();
+let reloadingForTargetMismatch = false;
 
 function logError(message, error) {
   console.error(`[andypsx-live] ${message}`, error);
+}
+
+function reportedTargetOrigin(message, url) {
+  if (
+    typeof message?.targetOrigin === "string" &&
+    message.targetOrigin.length > 0
+  ) {
+    return message.targetOrigin;
+  }
+
+  if (typeof url === "string") {
+    try {
+      return new URL(url).origin;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function reloadForTargetMismatch(origin) {
+  if (reloadingForTargetMismatch) return;
+  reloadingForTargetMismatch = true;
+
+  console.warn(
+    `[andypsx-live] Target distinto (${origin} vs ${TARGET_ORIGIN}); recargando extensión.`,
+  );
+
+  setTimeout(() => {
+    try {
+      chrome.runtime.reload();
+    } catch (error) {
+      reloadingForTargetMismatch = false;
+      logError("No se pudo recargar la extensión", error);
+    }
+  }, 50);
 }
 
 async function getGlobalStates() {
@@ -42,7 +80,10 @@ async function requestTabSession(tabId) {
     if (response?.ok && response.session) {
       const session = normalizeSession(response.session);
 
-      if (session.origin !== TARGET_ORIGIN) return null;
+      if (session.origin !== TARGET_ORIGIN) {
+        reloadForTargetMismatch(session.origin);
+        return null;
+      }
 
       sessionKnownTabs.add(tabId);
       return session;
@@ -195,6 +236,14 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // ─── el content script avisa cuando detecta login/logout ────────────────────
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "modules:sync") {
+    const origin = reportedTargetOrigin(message, sender.tab?.url);
+
+    if (origin && origin !== TARGET_ORIGIN) {
+      reloadForTargetMismatch(origin);
+      sendResponse({ ok: false, error: "target-mismatch" });
+      return true;
+    }
+
     restart()
       .then(() => sendResponse({ ok: true }))
       .catch((error) => {
@@ -208,6 +257,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   const tabId = sender.tab?.id;
   const url = sender.tab?.url;
+  const origin = reportedTargetOrigin(message, url);
+
+  if (origin && origin !== TARGET_ORIGIN) {
+    reloadForTargetMismatch(origin);
+    sendResponse({ ok: false, error: "target-mismatch" });
+    return false;
+  }
 
   if (typeof tabId !== "number" || !isTargetUrl(url)) return false;
 

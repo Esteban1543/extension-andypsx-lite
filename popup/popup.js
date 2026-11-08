@@ -337,7 +337,7 @@ async function load() {
 
     if (sessionInfo.tabIsTarget && !sessionInfo.fresh) {
       void chrome.runtime
-        .sendMessage({ type: "modules:sync" })
+        .sendMessage({ type: "modules:sync", targetOrigin: TARGET_ORIGIN })
         .catch((error) =>
           console.debug("[andypsx-live] No se pudo pedir resync:", error),
         );
