@@ -81,7 +81,7 @@ andypsx-extension/
 ├── content.js                 ← arranca módulos de contenido y detecta sesión
 ├── session-probe.js           ← detecta sesión en pestañas abiertas tras actualizar
 ├── core/
-│   ├── config.js              ← ⭐ ÚNICO archivo para cambiar la página objetivo
+│   ├── config.js              ← target detectado por hostname (sin editar)
 │   ├── storage.js             ← estado de módulos y migración
 │   ├── url.js                 ← comprobación de URL y patrones
 │   ├── css.js                 ← insertCSS/removeCSS y cola por pestaña
@@ -128,40 +128,25 @@ objetivo.
 
 ---
 
-## 4. Cambiar la página objetivo (un solo archivo)
+## 4. Página objetivo (detectada automáticamente)
 
-Edita **solo** `core/config.js`:
+No hay constante de target que editar ni commitear. `core/config.js` detecta
+el objetivo en runtime según el hostname de la URL visitada:
 
-```js
-export const TARGETS = {
-  local: {
-    url: "http://127.0.0.1:8765/index.html",
-  },
-  production: {
-    url: "https://andypsx.com/live",
-  },
-};
+- `https://andypsx.com/...` → producción (actúa en `/live`).
+- `http://127.0.0.1:<puerto>/...` o `http://localhost:<puerto>/...` → copia
+  local (actúa en `/` y `/index.html`, cualquier puerto).
 
-export const ACTIVE_TARGET = "production";
-```
+La misma build funciona en ambos sitios sin tocar nada. El popup muestra el
+target de la pestaña activa y «Abrir página objetivo» abre ese target
+(producción por defecto).
 
-- `"production"`: aplica CSS y raffles en `https://andypsx.com/live`.
-- `"local"`: aplica CSS y raffles en la copia local servida en
-  `http://127.0.0.1:8765/index.html`.
+La sesión guardada se valida contra el origin de la página que la reportó:
+una sesión detectada en local no activa Vista limpia en producción ni al revés.
 
-Después de cambiar `ACTIVE_TARGET`:
-
-1. Recarga la extensión en `chrome://extensions`.
-2. Recarga la página objetivo.
-
-Si cambias el archivo con la extensión ya cargada, el background detecta que el
-target del content script no coincide y recarga la extensión automáticamente.
-Si no lo hace, recarga la extensión a mano.
-
-El manifest ya permite `andypsx.com`, `127.0.0.1` y `localhost`. Los puertos
-locales no hace falta declararlos: `http://127.0.0.1/*` cubre cualquier puerto.
-Si algún día cambias a otro dominio, añádelo a `host_permissions`,
-`content_scripts.matches` y `web_accessible_resources.matches`.
+Si algún día añades otro dominio, decláralo en `host_permissions`,
+`content_scripts.matches` y `web_accessible_resources.matches`, y añade el
+hostname a `core/config.js` (`targetForUrl`).
 
 ### Probar en local
 
@@ -199,11 +184,13 @@ sesión, o abre `https://andypsx.com/live` en un navegador sin cookies.
   background intenta inyectar `session-probe.js`. Si sigue igual, usa
   **Recargar página** en el popup.
 - `Vista limpia no coincide ... comprobando CSS`: el background no está
-  aplicando el CSS. El content script reintenta y, tras 3 fallos, usa una hoja
-  adoptada. Si sigue igual, revisa que la pestaña actual sea la página objetivo.
-  Si el target cambió, el background recarga la extensión automáticamente.
-- `[andypsx-live] Error al insertar CSS`: `insertCSS` falló. Revisa la ruta del
-  CSS y los permisos del manifest.
+  aplicando el CSS. El content script reintenta con backoff (1 s, 2 s, 4 s…
+  techo 8 s) mientras el estado deseado no se aplique; un fallo transitorio
+  se recupera solo. Si sigue igual tras ~10 s, recarga la extensión y la
+  página: el background puede estar muerto o el `insertCSS` fallando de
+  verdad.
+- `Error al insertar CSS` (solo con `debug` on): `insertCSS` falló. Revisa la
+  ruta del CSS y los permisos del manifest.
 - Si tras recargar extensión y página sigue igual, revisa que no haya otra copia
   de la extensión cargada o Stylus aplicando el mismo CSS.
 
@@ -274,13 +261,13 @@ sesión, o abre `https://andypsx.com/live` en un navegador sin cookies.
   inyecta `session-probe.js` para no obligar a recargar la página.
 - Si el popup detecta sesión sin comprobar, muestra “Sesión sin comprobar” y un
   botón para recargar la página.
-- `content.js` compara el CSS aplicado con el estado deseado. Pide confirmación
-  al background (`css:ensure`) con reintentos 1 s, 2 s, 4 s.
-- Tras 3 fallos confirmados o background inalcanzable, aplica una hoja
-  `CSSStyleSheet` adoptada con el CSS cacheado. No crea nodos `<style>` ni
-  `<link>` en el DOM.
-- Si el background no responde, la hoja adoptada mantiene Vista limpia
-  funcionando.
+- `content.js` compara el CSS aplicado con el estado deseado. Si no coincide,
+  pide confirmación al background (`css:ensure`) y reintenta con backoff
+  (1 s, 2 s, 4 s… techo 8 s) **sin límite de intentos**: un fallo transitorio
+  del background o de `insertCSS` se recupera solo en el siguiente ciclo.
+- No hay fallback local: Vista limpia depende solo de `insertCSS` del
+  background (ver P1 en la sección 8). Si el background está realmente
+  muerto, el CSS no se aplica y no queda rastro en la página.
 - Si no se puede comprobar la sesión, Vista limpia queda apagada.
 - El login de la cabecera y el login de Kick no cuentan.
 
@@ -404,12 +391,37 @@ background y el popup lo bloquearán cuando la tarjeta **Tu directo** muestre
 
 ## 8. Detectabilidad y privacidad
 
-### P1 — Sin nodos `<style>` / `<link>`
+### P1 — Sin fallback de CSS visible (opción A: sin fallback)
 
-El fallback ya no crea `<style id="...">`. Usa `CSSStyleSheet` +
-`document.adoptedStyleSheets`, que no añade nodos al DOM. Antes de usarlo pide
-confirmación al background con `css:ensure` y reintenta 1 s, 2 s, 4 s. Solo
-adopta la hoja tras 3 fallos confirmados o si el background no responde.
+Decisión tomada en v1.5.0: **el fallback con `CSSStyleSheet` +
+`document.adoptedStyleSheets` se eliminó por completo**.
+
+Por qué: `document.adoptedStyleSheets` es una propiedad pública y enumerable
+del documento, y las reglas de una hoja construible se pueden leer con
+`[...sheet.cssRules]` (MDN «Document.adoptedStyleSheets», CSSOM
+`dom-documentorshadowroot-adoptedstylesheets`). La página podía hacer:
+
+```js
+const mia = document.adoptedStyleSheets.find(s =>
+  [...s.cssRules].some(r => /data-cabecera-sitio/.test(r.cssText)));
+```
+
+Es decir: el fallback era detectable en cuanto actuaba. Con la opción A:
+
+- Vista limpia depende solo de `chrome.scripting.insertCSS` (origin AUTHOR,
+  sin nodo en el DOM, no enumera en `document.styleSheets` de la página ni en
+  `adoptedStyleSheets`).
+- Si el `insertCSS` o el background fallan, el content script reintenta con
+  backoff (1 s, 2 s, 4 s… techo 8 s) **sin límite**: un fallo transitorio se
+  recupera solo. No hay caché de CSS cuyo rechazo envenene reintentos.
+- Si el background está realmente muerto, Vista limpia no se aplica: fallo
+  silencioso, **no detectable**. Se prefirió «no funciona» a «funciona y
+  delata».
+- Con un `insertCSS` que falla siempre, la página ve
+  `document.adoptedStyleSheets.length === 0`.
+
+No se parchea el prototipo de `Document` para ocultar nada: cambiar
+descriptores del mundo de la página sería más detectable todavía.
 
 ### P2 — Sin atributos `data-*`
 
@@ -427,7 +439,11 @@ Por defecto:
 En ese modo se mantiene el clic sintético actual. Los eventos tienen
 `isTrusted === false`; la página puede detectarlo.
 
-Para usar clics trusted, activa el ajuste desde la consola del service worker:
+El ajuste se controla desde el **popup**: el módulo Raffles tiene el checkbox
+«Clics indetectables (permiso debugger)». Se guarda en
+`modules.raffles.settings.trustedClicks` y el módulo lo lee en el momento del
+clic, así que aplica al raffle siguiente sin reiniciar nada. También se puede
+cambiar a mano:
 
 ```js
 chrome.storage.sync.get("modules").then(({ modules = {} }) => {
@@ -444,19 +460,18 @@ chrome.storage.sync.get("modules").then(({ modules = {} }) => {
 });
 ```
 
-Luego apaga/enciende Raffles o recarga la página. Con `trustedClicks: true` el
-background usa `chrome.debugger` + `Input.dispatchMouseEvent` y adjunta el
-debugger solo durante el clic.
+Con `trustedClicks: true` el background usa `chrome.debugger` +
+`Input.dispatchMouseEvent` y adjunta el debugger solo durante el clic.
 
 Trade-offs:
 
 - El permiso `debugger` muestra una advertencia al instalar.
 - Mientras el debugger está adjunto aparece la barra “Chrome está siendo
-  controlado por software de prueba”.
+  controlado por software de prueba”. El popup avisa al activarlo.
 - Si DevTools está abierto en la pestaña, `chrome.debugger.attach` puede fallar
   y el raffle se omite.
-- En Playwright puede fallar si el debugger de la pestaña ya está adjunto; en
-  la prueba de aceptación de este repo el clic trusted funcionó.
+- El ajuste va en `chrome.storage.sync` (como el resto de la configuración de
+  módulos): si sincronizas tu cuenta en otro equipo, actívalo/apágalo allí.
 
 ### P4 — CSS fuera de `web_accessible_resources`
 
@@ -478,14 +493,25 @@ eliminar Vista limpia.
 ### P6 — Higiene
 
 - Sin `__andypsx*`, `data-andypsx*` ni IDs con el nombre del proyecto en el DOM.
-- Los logs informativos están detrás de `debug`:
+- Todos los logs (informativos **y errores**) están detrás de `debug`:
   ```js
   chrome.storage.local.set({ debug: true });
   ```
-  Recarga la extensión/página para aplicarlo. Sin `debug`, no se imprimen logs
-  informativos.
+  Recarga la extensión/página para aplicarlo. Sin `debug` no se imprime nada,
+  y nunca se imprime un stack trace: el stack incluye
+  `chrome-extension://<id>/…`, que delata el ID y rutas internas.
 - El content script sigue en mundo aislado (`world` no se toca).
 - No se crean globales en `window`.
+
+### Métrica de `document.styleSheets` (baseline honesta)
+
+Al comparar `document.styleSheets.length` con y sin extensión, la baseline debe
+medirse en el **mismo navegador, misma página y mismo tiempo de espera**: el
+propio sitio inyecta un `<style>#app-splash` duplicado al hidratar (artefacto
+de Next.js), así que la cuenta puede subir de 4 a 5 **sin** extensión. En las
+pruebas contra `https://andypsx.com/live` (mismo navegador, misma espera de
+hidratación) la extensión deja la cuenta idéntica a la baseline; el `<style>`
+del splash del sitio explicaba la diferencia 4 vs 5 del informe anterior.
 
 ---
 
@@ -493,7 +519,7 @@ eliminar Vista limpia.
 
 ```bash
 cd /home/manager/Downloads
-zip -r andypsx-extension-v1.4.0.zip andypsx-extension-v1.0.4 \
+zip -r andypsx-extension-v1.5.0.zip andypsx-extension-v1.0.4 \
   -x '*/.git/*' '*/__pycache__/*'
 ```
 

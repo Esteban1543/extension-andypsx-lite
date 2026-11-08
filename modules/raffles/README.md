@@ -82,7 +82,11 @@ adjunta solo durante el clic y se desadjunta al terminar. Trade-offs:
   adjunto.
 - DevTools abierto puede impedir `chrome.debugger.attach`.
 
-Cómo activarlo:
+Cómo activarlo: checkbox «Clics indetectables (permiso debugger)» en el popup,
+bajo el módulo Raffles. El ajuste se guarda en
+`modules.raffles.settings.trustedClicks` y el módulo lo lee en el momento del
+clic, así que aplica al raffle siguiente sin reiniciar nada. También se puede
+cambiar a mano:
 
 ```js
 chrome.storage.sync.get("modules").then(({ modules = {} }) => {

@@ -1,6 +1,3 @@
-import { TARGET_ORIGIN } from "./config.js";
-import { warn } from "./log.js";
-
 const POINTER_MOVE_STEPS = 4;
 
 export function wait(milliseconds) {
@@ -140,7 +137,6 @@ export async function trustedHumanClick(element, { shouldStop = () => false } = 
   try {
     response = await chrome.runtime.sendMessage({
       type: "trusted-click",
-      targetOrigin: TARGET_ORIGIN,
       targetX: plan.targetX,
       targetY: plan.targetY,
       moves: plan.moves,
@@ -148,8 +144,7 @@ export async function trustedHumanClick(element, { shouldStop = () => false } = 
       pressWaitMs: plan.pressWaitMs,
       releaseWaitMs: plan.releaseWaitMs,
     });
-  } catch (error) {
-    warn("No se pudo pedir el clic confiable:", error);
+  } catch {
     return false;
   }
 

@@ -51,9 +51,11 @@ Si no hay sesión:
 - el popup deshabilita el toggle de Vista limpia;
 - la preferencia guardada se conserva y se vuelve a aplicar al iniciar sesión.
 
-Si el background no aplica el CSS, `content.js` usa una hoja
-`CSSStyleSheet` adoptada con el CSS cacheado como respaldo. No crea nodos
-`<style>` ni `<link>`. Al cerrar sesión o apagar el módulo, esa hoja se retira.
+Si el background no aplica el CSS, `content.js` reintenta pidiendo `css:ensure`
+al background con backoff (1 s, 2 s, 4 s… techo 8 s), sin límite de intentos.
+No hay fallback local: una hoja adoptada sería detectable enumerando
+`document.adoptedStyleSheets` (ver sección 8 del README raíz). Si el background
+está muerto, el CSS no se aplica y no queda rastro en la página.
 
 ## Bloques del CSS
 

@@ -135,8 +135,7 @@ function nextClickDelay(batchHasClick) {
   return randomBetween(range.min, range.max);
 }
 
-export async function init(ctx) {
-  const settings = await ctx.getSettings();
+export function init(ctx) {
   const moduleState = {
     observer: null,
     scanTimer: null,
@@ -150,7 +149,6 @@ export async function init(ctx) {
     processing: false,
     stopped: false,
     batchHasClick: false,
-    trustedClicks: settings?.trustedClicks === true,
   };
 
   activeState = moduleState;
@@ -210,7 +208,12 @@ export async function init(ctx) {
       return false;
     }
 
-    const clicked = moduleState.trustedClicks
+    // Se lee en el momento del clic: cambiar el ajuste en el popup aplica al
+    // raffle siguiente sin reiniciar el módulo.
+    const settings = await ctx.getSettings();
+    const trustedClicks = settings?.trustedClicks === true;
+
+    const clicked = trustedClicks
       ? await trustedHumanClick(button, {
           shouldStop: () => moduleState.stopped,
         })
@@ -221,7 +224,7 @@ export async function init(ctx) {
     if (!clicked || moduleState.stopped) {
       if (!moduleState.stopped) {
         markSkipped(section, "not-clickable");
-        if (moduleState.trustedClicks) {
+        if (trustedClicks) {
           ctx.log("Clic confiable falló:", title);
         }
       }
@@ -236,7 +239,7 @@ export async function init(ctx) {
       title,
       at: Date.now(),
       delayMs: Math.round(delayMs),
-      trusted: moduleState.trustedClicks,
+      trusted: trustedClicks,
     });
 
     return true;

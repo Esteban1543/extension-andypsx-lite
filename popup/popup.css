@@ -235,6 +235,51 @@ body {
   opacity: .55;
 }
 
+/* ── ajustes por módulo (p. ej. clics indetectables) ── */
+.setting-row {
+  border-bottom: 1px solid var(--borde);
+  background: rgb(0 0 0 / .12);
+}
+
+.setting-row:last-child {
+  border-bottom: 0;
+}
+
+.setting-fila {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 0 10px;
+  cursor: pointer;
+}
+
+.setting-input {
+  flex: none;
+  margin-top: 2px;
+  accent-color: var(--accent-verde);
+}
+
+.setting-input:disabled {
+  opacity: .55;
+}
+
+.setting-copy {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.setting-label {
+  color: var(--texto);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.setting-note {
+  color: var(--texto-suave);
+  font-size: 10px;
+}
+
 .leyenda {
   padding-top: 10px;
   border-top: 1px solid var(--borde);

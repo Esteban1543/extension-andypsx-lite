@@ -1,7 +1,9 @@
+import { error as logError } from "./log.js";
+
 export function createRegistry({
   load,
   createContext = () => ({}),
-  onError = (error, id) => console.error(`[registry] Módulo "${id}":`, error),
+  onError = (error, id) => logError(`[registry] Módulo "${id}":`, error),
 } = {}) {
   if (typeof load !== "function") {
     throw new TypeError("createRegistry necesita una función load.");

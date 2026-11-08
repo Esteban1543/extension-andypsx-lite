@@ -1,4 +1,4 @@
-import { ACTIVE_TARGET, TARGET_ORIGIN, TARGET_URL, isTargetUrl } from "../core/config.js";
+import { TARGETS, isTargetUrl, targetForUrl } from "../core/config.js";
 import {
   defaultSession,
   getSessionState,
@@ -6,7 +6,11 @@ import {
   normalizeSession,
   watchSession,
 } from "../core/session.js";
-import { getModuleStates, setModuleEnabled } from "../core/storage.js";
+import {
+  getModuleStates,
+  setModuleEnabled,
+  updateModuleSettings,
+} from "../core/storage.js";
 import { modules as rawModules } from "../modules/index.js";
 
 const modules = (Array.isArray(rawModules) ? rawModules : []).filter(
@@ -37,6 +41,10 @@ let sessionInfo = {
   fresh: false,
 };
 let ready = false;
+
+// Target mostrado/abierto en el popup: el de la pestaña activa si es un
+// target, o producción por defecto. Se detecta por hostname, sin constante.
+let activeTarget = TARGETS.production;
 
 function showStatus(text, tone = "neutral") {
   elements.status.textContent = text;
@@ -177,6 +185,74 @@ function createModuleSwitch({
   return { input, track };
 }
 
+const TRUSTED_CLICKS_NOTE =
+  "Durante cada clic aparece la barra «Chrome está siendo controlado por software de prueba». Con DevTools abierto el clic puede fallar y el raffle se omite.";
+
+async function saveTrustedClicks(input) {
+  const previous = input.checked;
+  const next = !previous;
+  hideStatus();
+  input.disabled = true;
+
+  try {
+    await updateModuleSettings("raffles", { trustedClicks: next });
+    input.checked = next;
+    states = {
+      ...states,
+      raffles: {
+        ...(states.raffles ?? {}),
+        settings: {
+          ...(states.raffles?.settings ?? {}),
+          trustedClicks: next,
+        },
+      },
+    };
+
+    if (next) {
+      showStatus(TRUSTED_CLICKS_NOTE, "warn");
+    }
+  } catch (error) {
+    showStatus("No se pudo guardar el ajuste de clics.", "error");
+    console.error("[andypsx-live] No se pudo guardar trustedClicks:", error);
+  } finally {
+    input.disabled = false;
+  }
+}
+
+function createTrustedClicksRow({ checked, disabled }) {
+  const row = document.createElement("li");
+  row.className = "setting-row";
+
+  const label = document.createElement("label");
+  label.className = "setting-fila";
+
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.className = "setting-input";
+  input.checked = checked;
+  input.disabled = disabled;
+  input.addEventListener("change", () => {
+    void saveTrustedClicks(input);
+  });
+
+  const copy = document.createElement("span");
+  copy.className = "setting-copy";
+
+  const name = document.createElement("span");
+  name.className = "setting-label";
+  name.textContent = "Clics indetectables (permiso debugger)";
+
+  const note = document.createElement("span");
+  note.className = "setting-note";
+  note.textContent = TRUSTED_CLICKS_NOTE;
+
+  copy.append(name, note);
+  label.append(input, copy);
+  row.append(label);
+
+  return row;
+}
+
 function createModuleRow(definition, { checked, disabled, note }) {
   const safeId = definition.id.replace(/[^a-zA-Z0-9_-]/g, "-");
   const nameId = `module-name-${safeId}`;
@@ -267,12 +343,36 @@ function renderModules() {
         note,
       }),
     );
+
+    if (definition.id === "raffles") {
+      const moduleDisabled = blocked || !storedEnabled;
+      elements.moduleList.append(
+        createTrustedClicksRow({
+          checked: states.raffles?.settings?.trustedClicks === true,
+          disabled: moduleDisabled,
+        }),
+      );
+    }
   }
+}
+
+function renderTarget() {
+  elements.targetUrl.textContent = activeTarget.url;
+  elements.targetUrl.title = activeTarget.url;
+  elements.targetMode.textContent = activeTarget.label;
 }
 
 async function getActiveTab() {
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   return tabs[0] ?? null;
+}
+
+function originOf(url) {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
+  }
 }
 
 async function readSessionForActiveTab() {
@@ -283,6 +383,7 @@ async function readSessionForActiveTab() {
   const tabUrl = typeof tab?.url === "string" ? tab.url : null;
   const tabId = typeof tab?.id === "number" ? tab.id : null;
   const tabIsTarget = Boolean(tab && isTargetUrl(tab.url));
+  const tabOrigin = tabUrl ? originOf(tabUrl) : null;
 
   if (tabIsTarget) {
     try {
@@ -293,7 +394,7 @@ async function readSessionForActiveTab() {
       if (response?.ok && response.session) {
         const session = normalizeSession(response.session);
 
-        if (session.origin === TARGET_ORIGIN) {
+        if (session.origin === tabOrigin) {
           return {
             session,
             tabIsTarget: true,
@@ -312,7 +413,7 @@ async function readSessionForActiveTab() {
   }
 
   return {
-    session: await getSessionState(),
+    session: await getSessionState(tabOrigin ?? undefined),
     tabIsTarget,
     tabId,
     tabUrl,
@@ -331,13 +432,15 @@ async function load() {
 
     states = nextStates;
     sessionInfo = nextSessionInfo;
+    activeTarget = targetForUrl(sessionInfo.tabUrl) ?? TARGETS.production;
     ready = true;
+    renderTarget();
     renderSession();
     renderModules();
 
     if (sessionInfo.tabIsTarget && !sessionInfo.fresh) {
       void chrome.runtime
-        .sendMessage({ type: "modules:sync", targetOrigin: TARGET_ORIGIN })
+        .sendMessage({ type: "modules:sync" })
         .catch((error) =>
           console.debug("[andypsx-live] No se pudo pedir resync:", error),
         );
@@ -350,7 +453,7 @@ async function load() {
 
 function bindEvents() {
   elements.openTarget.addEventListener("click", () => {
-    chrome.tabs.create({ url: TARGET_URL }).catch((error) => {
+    chrome.tabs.create({ url: activeTarget.url }).catch((error) => {
       showStatus("No se pudo abrir la página objetivo.", "error");
       console.error("[andypsx-live] No se pudo abrir la página:", error);
     });
@@ -370,14 +473,16 @@ function bindEvents() {
 }
 
 elements.version.textContent = `v${chrome.runtime.getManifest().version}`;
-elements.targetUrl.textContent = TARGET_URL;
-elements.targetUrl.title = TARGET_URL;
-elements.targetMode.textContent =
-  ACTIVE_TARGET === "local" ? "Local" : "Producción";
+renderTarget();
 
 bindEvents();
 
 watchSession((session) => {
+  // Ignora sesiones guardadas desde otro target (p. ej. la copia local
+  // mientras se mira producción, o al revés).
+  const tabOrigin = sessionInfo.tabUrl ? originOf(sessionInfo.tabUrl) : null;
+  if (tabOrigin && session.origin !== tabOrigin) return;
+
   sessionInfo = {
     ...sessionInfo,
     session,

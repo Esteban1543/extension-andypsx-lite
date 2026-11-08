@@ -1,4 +1,4 @@
-import { TARGET_ORIGIN } from "./config.js";
+import { isKnownTargetOrigin } from "./config.js";
 import { log, warn } from "./log.js";
 
 const SESSION_KEY = "session";
@@ -20,7 +20,7 @@ export function defaultSession() {
   return {
     known: false,
     loggedIn: false,
-    origin: TARGET_ORIGIN,
+    origin: null,
     reason: "unknown",
     updatedAt: 0,
   };
@@ -35,7 +35,7 @@ export function normalizeSession(value) {
     origin:
       typeof value.origin === "string" && value.origin.length > 0
         ? value.origin
-        : TARGET_ORIGIN,
+        : null,
     reason:
       typeof value.reason === "string" && value.reason.length > 0
         ? value.reason
@@ -99,12 +99,22 @@ function readSessionFromDom(doc = document) {
   return { known: false, loggedIn: false, reason: "unknown" };
 }
 
-export async function getSessionState() {
+// expectedOrigin (opcional): origin de la URL que se está comprobando. Con él,
+// una sesión guardada desde otro target (p. ej. la copia local) no cuenta.
+// Sin él, vale cualquier origen de target conocido (p. ej. el badge).
+export async function getSessionState(expectedOrigin = null) {
   try {
     const stored = await chrome.storage.local.get(SESSION_KEY);
     const session = normalizeSession(stored[SESSION_KEY]);
+    const validOrigin =
+      session.origin !== null && isKnownTargetOrigin(session.origin);
 
-    return session.origin === TARGET_ORIGIN ? session : defaultSession();
+    if (!validOrigin) return defaultSession();
+    if (expectedOrigin && session.origin !== expectedOrigin) {
+      return defaultSession();
+    }
+
+    return session;
   } catch (error) {
     warn("No se pudo leer la sesión:", error);
     return defaultSession();
@@ -114,7 +124,7 @@ export async function getSessionState() {
 async function saveSessionState(session) {
   const next = {
     ...normalizeSession(session),
-    origin: TARGET_ORIGIN,
+    origin: location.origin,
     updatedAt: Date.now(),
   };
 
@@ -131,7 +141,12 @@ export function watchSession(callback) {
     if (areaName !== "local" || !changes[SESSION_KEY]) return;
 
     const session = normalizeSession(changes[SESSION_KEY].newValue);
-    callback(session.origin === TARGET_ORIGIN ? session : defaultSession());
+
+    if (session.origin === null || !isKnownTargetOrigin(session.origin)) {
+      return;
+    }
+
+    callback(session);
   };
 
   chrome.storage.onChanged.addListener(listener);
@@ -174,14 +189,14 @@ export function startSessionWatcher({ onChange, shouldCheck = () => true } = {})
 
     if (!changed) {
       last = domSession;
-      return { ...domSession, origin: TARGET_ORIGIN, updatedAt: Date.now() };
+      return { ...domSession, origin: location.origin, updatedAt: Date.now() };
     }
 
     try {
       await saveSessionState(domSession);
     } catch (error) {
       warn("No se pudo guardar la sesión:", error);
-      return { ...domSession, origin: TARGET_ORIGIN, updatedAt: Date.now() };
+      return { ...domSession, origin: location.origin, updatedAt: Date.now() };
     }
 
     last = domSession;
@@ -196,7 +211,6 @@ export function startSessionWatcher({ onChange, shouldCheck = () => true } = {})
     try {
       chrome.runtime.sendMessage({
         type: "session:update",
-        targetOrigin: TARGET_ORIGIN,
       }).catch(() => {});
     } catch {
       // El background puede no estar disponible en ese instante.
@@ -210,7 +224,7 @@ export function startSessionWatcher({ onChange, shouldCheck = () => true } = {})
       }
     }
 
-    return { ...domSession, origin: TARGET_ORIGIN, updatedAt: Date.now() };
+    return { ...domSession, origin: location.origin, updatedAt: Date.now() };
   }
 
   function check() {

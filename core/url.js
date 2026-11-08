@@ -1,4 +1,4 @@
-import { TARGET_ORIGIN, isTargetUrl } from "./config.js";
+import { isTargetUrl } from "./config.js";
 
 function matchesPattern(pattern, url) {
   if (typeof pattern !== "string" || typeof url !== "string") return false;
@@ -12,15 +12,26 @@ function matchesPattern(pattern, url) {
   return new RegExp(`^${source}$`).test(url);
 }
 
-function resolvePattern(pattern) {
+// Los patrones relativos se resuelven contra el origin de la propia URL,
+// no contra un origin global: el target se detecta por hostname.
+function resolvePattern(pattern, origin) {
   if (typeof pattern !== "string" || pattern.length === 0) return "";
   if (/^https?:\/\//i.test(pattern)) return pattern;
-  if (pattern.startsWith("/")) return `${TARGET_ORIGIN}${pattern}`;
-  return `${TARGET_ORIGIN}/${pattern}`;
+  if (pattern.startsWith("/")) return `${origin}${pattern}`;
+  return `${origin}/${pattern}`;
 }
 
 export function matchesTarget(url, patterns) {
   if (!isTargetUrl(url) || !Array.isArray(patterns)) return false;
 
-  return patterns.some((pattern) => matchesPattern(resolvePattern(pattern), url));
+  let origin = "";
+  try {
+    origin = new URL(url).origin;
+  } catch {
+    return false;
+  }
+
+  return patterns.some((pattern) =>
+    matchesPattern(resolvePattern(pattern, origin), url),
+  );
 }

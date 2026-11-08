@@ -30,5 +30,5 @@ export function debug(...args) {
 }
 
 export function error(...args) {
-  console.error("Extension:", ...args);
+  if (debugEnabled) console.error("Extension:", ...args);
 }

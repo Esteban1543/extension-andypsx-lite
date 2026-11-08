@@ -1,3 +1,5 @@
+import { error as logError } from "./log.js";
+
 export function createBus() {
   const listeners = new Map();
 
@@ -30,7 +32,7 @@ export function createBus() {
       try {
         handler(payload);
       } catch (error) {
-        console.error(`[bus] Error en el evento "${name}":`, error);
+        logError(`[bus] Error en el evento "${name}":`, error);
       }
     }
   }

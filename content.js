@@ -40,8 +40,6 @@
     const bus = busModule.createBus();
     let states = {};
     let statesLoaded = false;
-    let adoptedStyleSheet = null;
-    let cssTextPromise = null;
     let cssFailureCount = 0;
     let nextCssAttemptAt = 0;
     let currentUrl = location.href;
@@ -88,7 +86,7 @@
       const token = ++refreshToken;
       const [rawStates, session] = await Promise.all([
         storage.getModuleStates(modules),
-        sessionModule.getSessionState(),
+        sessionModule.getSessionState(location.origin),
       ]);
       const nextStates = sessionModule.applySessionGate(
         modules,
@@ -113,91 +111,10 @@
       );
     }
 
-    async function getCssText() {
-      if (!cssTextPromise) {
-        cssTextPromise = (async () => {
-          try {
-            const stored = await chrome.storage.local.get(
-              config.CSS_CACHE_KEY,
-            );
-            const cached = stored[config.CSS_CACHE_KEY];
-
-            if (typeof cached === "string" && cached.length > 0) {
-              return cached;
-            }
-          } catch (error) {
-            logModule.warn("No se pudo leer el CSS guardado:", error);
-          }
-
-          try {
-            const response = await chrome.runtime.sendMessage({
-              type: "css:text",
-            });
-
-            if (
-              response?.ok === true &&
-              typeof response.css === "string" &&
-              response.css.length > 0
-            ) {
-              return response.css;
-            }
-          } catch (error) {
-            logModule.warn("No se pudo pedir el CSS:", error);
-          }
-
-          throw new Error("CSS no disponible");
-        })();
-      }
-
-      return cssTextPromise;
-    }
-
-    function removeAdoptedCss() {
-      if (!adoptedStyleSheet) return;
-
-      document.adoptedStyleSheets = document.adoptedStyleSheets.filter(
-        (sheet) => sheet !== adoptedStyleSheet,
-      );
-      adoptedStyleSheet = null;
-    }
-
-    async function adoptCss() {
-      if (
-        adoptedStyleSheet &&
-        document.adoptedStyleSheets.includes(adoptedStyleSheet)
-      ) {
-        return true;
-      }
-
-      if (
-        !("adoptedStyleSheets" in document) ||
-        typeof CSSStyleSheet !== "function"
-      ) {
-        return false;
-      }
-
-      try {
-        const css = await getCssText();
-        const sheet = new CSSStyleSheet();
-        sheet.replaceSync(css);
-        document.adoptedStyleSheets = [
-          ...document.adoptedStyleSheets,
-          sheet,
-        ];
-        adoptedStyleSheet = sheet;
-        logModule.log("Hoja de estilos adoptada aplicada.");
-        return true;
-      } catch (error) {
-        logModule.error("No se pudo aplicar el CSS adoptado:", error);
-        return false;
-      }
-    }
-
     async function requestCssEnsure() {
       try {
         const response = await chrome.runtime.sendMessage({
           type: "css:ensure",
-          targetOrigin: config.TARGET_ORIGIN,
         });
         return response?.ok === true;
       } catch (error) {
@@ -206,8 +123,11 @@
       }
     }
 
+    // Backoff 1 s, 2 s, 4 s… con techo: un fallo transitorio del background
+    // no mata la función. Se reintenta para siempre mientras el estado
+    // deseado siga sin aplicarse; al aplicar, el contador se resetea.
     function backoffDelay(failures) {
-      return Math.min(1000 * 2 ** Math.max(0, failures - 1), 4000);
+      return Math.min(1000 * 2 ** Math.max(0, failures - 1), 8000);
     }
 
     async function ensureCssState() {
@@ -220,12 +140,10 @@
 
       if (applied === desired) {
         cssFailureCount = 0;
-        if (!desired) removeAdoptedCss();
         return;
       }
 
       if (!desired) {
-        removeAdoptedCss();
         await requestCssEnsure();
         return;
       }
@@ -233,9 +151,11 @@
       const now = Date.now();
       if (now < nextCssAttemptAt) return;
 
-      logModule.log(
-        `Vista limpia no coincide (deseada: true, aplicada: false); comprobando CSS.`,
-      );
+      if (cssFailureCount === 0) {
+        logModule.log(
+          "Vista limpia no coincide (deseada: true, aplicada: false); comprobando CSS.",
+        );
+      }
 
       const confirmed = await requestCssEnsure();
       await new Promise((resolve) => window.setTimeout(resolve, 200));
@@ -250,17 +170,8 @@
       nextCssAttemptAt = Date.now() + waitMs;
 
       logModule.log(
-        `CSS no aplicado${confirmed ? " tras confirmación" : ""}; reintento ${cssFailureCount}/3 en ${waitMs} ms.`,
+        `CSS no aplicado${confirmed ? " tras confirmación" : ""}; reintento ${cssFailureCount} en ${waitMs} ms.`,
       );
-
-      if (cssFailureCount >= 3) {
-        const adopted = await adoptCss();
-        logModule.log(
-          adopted
-            ? "CSS adoptado como último recurso."
-            : "No se pudo aplicar el CSS adoptado.",
-        );
-      }
     }
 
     function desiredIds() {
@@ -290,7 +201,7 @@
       queue = queue
         .then(runSync)
         .catch((error) =>
-          logModule.error("No se pudo sincronizar la página:", error),
+          logModule.warn("No se pudo sincronizar la página:", error),
         );
     }
 
@@ -314,7 +225,7 @@
         .then(scheduleSync)
         .then(ensureCssState)
         .catch((error) =>
-          logModule.error(
+          logModule.warn(
             "No se pudo leer la configuración de módulos:",
             error,
           ),
@@ -329,6 +240,7 @@
   }
 
   run().catch((error) => {
-    console.error("Extension:", error);
+    // Sin stack: el stack delata el ID de la extensión y rutas internas.
+    console.error("Extension:", error?.message ?? String(error));
   });
 })();

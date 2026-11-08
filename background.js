@@ -1,6 +1,6 @@
-import { CSS_CACHE_KEY, TARGET_ORIGIN, isTargetUrl } from "./core/config.js";
+import { isTargetUrl } from "./core/config.js";
 import { syncTab } from "./core/css.js";
-import { debug, error, initLogger, warn } from "./core/log.js";
+import { debug, error, initLogger } from "./core/log.js";
 import {
   applySessionGate,
   defaultSession,
@@ -22,8 +22,6 @@ const sessionKnownTabs = new Set();
 const MAX_CLICK_MOVES = 12;
 const MAX_CLICK_DELAY_MS = 1000;
 let ready = Promise.resolve();
-let reloadingForTargetMismatch = false;
-let cssTextPromise = null;
 
 function logError(message, detail) {
   error(message, detail);
@@ -33,74 +31,12 @@ function delay(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
 
-async function getCssText() {
-  if (!cssTextPromise) {
-    cssTextPromise = (async () => {
-      try {
-        const response = await fetch(
-          chrome.runtime.getURL("modules/vista-limpia/live.css"),
-        );
-
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-
-        const css = await response.text();
-        await chrome.storage.local.set({ [CSS_CACHE_KEY]: css });
-        return css;
-      } catch (error) {
-        const stored = await chrome.storage.local.get(CSS_CACHE_KEY);
-
-        if (
-          typeof stored[CSS_CACHE_KEY] === "string" &&
-          stored[CSS_CACHE_KEY].length > 0
-        ) {
-          return stored[CSS_CACHE_KEY];
-        }
-
-        throw error;
-      }
-    })();
+function originOf(url) {
+  try {
+    return new URL(url).origin;
+  } catch {
+    return null;
   }
-
-  return cssTextPromise;
-}
-
-function reportedTargetOrigin(message, url) {
-  if (
-    typeof message?.targetOrigin === "string" &&
-    message.targetOrigin.length > 0
-  ) {
-    return message.targetOrigin;
-  }
-
-  if (typeof url === "string") {
-    try {
-      return new URL(url).origin;
-    } catch {
-      return null;
-    }
-  }
-
-  return null;
-}
-
-function reloadForTargetMismatch(origin) {
-  if (reloadingForTargetMismatch) return;
-  reloadingForTargetMismatch = true;
-
-  warn(
-    `Target distinto (${origin} vs ${TARGET_ORIGIN}); recargando extensión.`,
-  );
-
-  setTimeout(() => {
-    try {
-      chrome.runtime.reload();
-    } catch (error) {
-      reloadingForTargetMismatch = false;
-      logError("No se pudo recargar la extensión", error);
-    }
-  }, 50);
 }
 
 function finiteNumber(value) {
@@ -142,12 +78,6 @@ function sanitizeMoves(moves) {
 async function handleTrustedClick(message, sender) {
   const tabId = sender.tab?.id;
   const url = sender.tab?.url;
-  const origin = reportedTargetOrigin(message, url);
-
-  if (origin && origin !== TARGET_ORIGIN) {
-    reloadForTargetMismatch(origin);
-    return { ok: false, error: "target-mismatch" };
-  }
 
   if (typeof tabId !== "number" || !isTargetUrl(url)) {
     return { ok: false, error: "not-target" };
@@ -247,7 +177,7 @@ async function getGlobalStates() {
   return applySessionGate(modules, states, session);
 }
 
-async function requestTabSession(tabId) {
+async function requestTabSession(tabId, url) {
   try {
     const response = await chrome.tabs.sendMessage(tabId, {
       type: "session:get",
@@ -255,9 +185,9 @@ async function requestTabSession(tabId) {
 
     if (response?.ok && response.session) {
       const session = normalizeSession(response.session);
+      const expectedOrigin = originOf(url);
 
-      if (session.origin !== TARGET_ORIGIN) {
-        reloadForTargetMismatch(session.origin);
+      if (session.origin !== expectedOrigin) {
         return null;
       }
 
@@ -271,10 +201,12 @@ async function requestTabSession(tabId) {
   return null;
 }
 
-async function getStatesForTab(tabId) {
+async function getStatesForTab(tabId, url) {
   const [states, session] = await Promise.all([
     getModuleStates(modules),
-    sessionKnownTabs.has(tabId) ? getSessionState() : defaultSession(),
+    sessionKnownTabs.has(tabId)
+      ? getSessionState(originOf(url))
+      : defaultSession(),
   ]);
 
   return applySessionGate(modules, states, session);
@@ -299,11 +231,11 @@ async function injectSessionProbe(tabId) {
 async function ensureTabSession(tabId, url) {
   if (sessionKnownTabs.has(tabId)) return;
 
-  let session = await requestTabSession(tabId);
+  let session = await requestTabSession(tabId, url);
 
   if (!session) {
     await new Promise((resolve) => setTimeout(resolve, 250));
-    session = await requestTabSession(tabId);
+    session = await requestTabSession(tabId, url);
   }
 
   if (!session) {
@@ -314,7 +246,7 @@ async function ensureTabSession(tabId, url) {
   await syncTab(
     tabId,
     url,
-    () => getStatesForTab(tabId),
+    () => getStatesForTab(tabId, url),
     modules,
   ).catch((error) =>
     logError(`No se pudo sincronizar la pestaña ${tabId}`, error),
@@ -353,7 +285,7 @@ async function syncAll() {
       syncTab(
         tab.id,
         tab.url,
-        () => getStatesForTab(tab.id),
+        () => getStatesForTab(tab.id, tab.url),
         modules,
       ).catch((error) =>
         logError(`No se pudo sincronizar la pestaña ${tab.id}`, error),
@@ -380,7 +312,7 @@ function restart() {
 
 async function applyToTab(tabId, url) {
   await ready.catch(() => {});
-  await syncTab(tabId, url, () => getStatesForTab(tabId), modules);
+  await syncTab(tabId, url, () => getStatesForTab(tabId, url), modules);
 }
 
 // ─── al navegar dentro del sitio, mantener el estado ────────────────────────
@@ -412,14 +344,6 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // ─── el content script avisa cuando detecta login/logout ────────────────────
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "modules:sync") {
-    const origin = reportedTargetOrigin(message, sender.tab?.url);
-
-    if (origin && origin !== TARGET_ORIGIN) {
-      reloadForTargetMismatch(origin);
-      sendResponse({ ok: false, error: "target-mismatch" });
-      return true;
-    }
-
     restart()
       .then(() => sendResponse({ ok: true }))
       .catch((error) => {
@@ -432,13 +356,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === "css:ensure") {
     const tabId = sender.tab?.id;
     const url = sender.tab?.url;
-    const origin = reportedTargetOrigin(message, url);
-
-    if (origin && origin !== TARGET_ORIGIN) {
-      reloadForTargetMismatch(origin);
-      sendResponse({ ok: false, error: "target-mismatch" });
-      return true;
-    }
 
     if (typeof tabId !== "number" || !isTargetUrl(url)) {
       sendResponse({ ok: false, error: "not-target" });
@@ -450,7 +367,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     syncTab(
       tabId,
       url,
-      () => getStatesForTab(tabId),
+      () => getStatesForTab(tabId, url),
       modules,
     )
       .then((inserted) => sendResponse({ ok: inserted === true }))
@@ -459,16 +376,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: false, error: String(error) });
       });
 
-    return true;
-  }
-
-  if (message?.type === "css:text") {
-    getCssText()
-      .then((css) => sendResponse({ ok: true, css }))
-      .catch((error) => {
-        logError("No se pudo leer el CSS", error);
-        sendResponse({ ok: false, error: String(error) });
-      });
     return true;
   }
 
@@ -486,13 +393,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   const tabId = sender.tab?.id;
   const url = sender.tab?.url;
-  const origin = reportedTargetOrigin(message, url);
-
-  if (origin && origin !== TARGET_ORIGIN) {
-    reloadForTargetMismatch(origin);
-    sendResponse({ ok: false, error: "target-mismatch" });
-    return false;
-  }
 
   if (typeof tabId !== "number" || !isTargetUrl(url)) return false;
 
@@ -526,8 +426,5 @@ watchSession(() => {
 });
 
 void initLogger();
-void getCssText().catch((error) =>
-  logError("No se pudo preparar el CSS de respaldo", error),
-);
 
 ready = restart();

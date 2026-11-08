@@ -26,6 +26,7 @@
   }
 
   run().catch((error) => {
-    console.error("Extension:", error);
+    // Sin stack: el stack delata el ID de la extensión y rutas internas.
+    console.error("Extension:", error?.message ?? String(error));
   });
 })();
