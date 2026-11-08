@@ -470,6 +470,9 @@ Trade-offs:
   controlado por software de prueba”. El popup avisa al activarlo.
 - Si DevTools está abierto en la pestaña, `chrome.debugger.attach` puede fallar
   y el raffle se omite.
+- El clic trusted es por coordenadas: un overlay del sitio (modal, banner)
+  que cubra el botón lo intercepta, igual que le pasaría a un usuario real
+  con el ratón. Ciérralo y el siguiente raffle se pulsa normal.
 - El ajuste va en `chrome.storage.sync` (como el resto de la configuración de
   módulos): si sincronizas tu cuenta en otro equipo, actívalo/apágalo allí.
 
