@@ -225,7 +225,10 @@ sesión, o abre `https://andypsx.com/live` en un navegador sin cookies.
 - El módulo de raffles usa `MutationObserver` para detectar raffles nuevos.
 - `core/bus.js` ofrece eventos locales (`ctx.bus.emit` / `ctx.bus.on`).
 - El estado de módulos se guarda en `chrome.storage.sync`.
-- El estado de sesión se guarda en `chrome.storage.local`.
+- El estado de sesión se guarda en `chrome.storage.local` **por origin**
+  (`session:https://andypsx.com`, `session:http://127.0.0.1:8765`): la copia
+  local y producción no se pisan. La clave única antigua `session` se migra
+  sola la primera vez que la extensión la lee.
 - El **badge** del icono muestra `ON` (verde) / `OFF` (gris) si hay algún módulo
   activo.
 - `modules/index.js` registra los módulos. El popup los muestra todos.
@@ -522,7 +525,7 @@ del splash del sitio explicaba la diferencia 4 vs 5 del informe anterior.
 
 ```bash
 cd /home/manager/Downloads
-zip -r andypsx-extension-v1.5.0.zip andypsx-extension-v1.0.4 \
+zip -r andypsx-extension-v1.5.1.zip andypsx-extension-v1.0.4 \
   -x '*/.git/*' '*/__pycache__/*'
 ```
 

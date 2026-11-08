@@ -1,7 +1,12 @@
-import { isKnownTargetOrigin } from "./config.js";
+import { TARGETS, isKnownTargetOrigin } from "./config.js";
 import { log, warn } from "./log.js";
 
-const SESSION_KEY = "session";
+// Una clave de sesión POR ORIGIN: "session:https://andypsx.com",
+// "session:http://127.0.0.1:8765". Así la copia local y producción no se
+// pisan entre sí (v1.5.0 usaba un slot único y el último que guardaba ganaba).
+const SESSION_PREFIX = "session:";
+const LEGACY_SESSION_KEY = "session";
+const PRODUCTION_ORIGIN = new URL(TARGETS.production.url).origin;
 
 const ACCOUNT_SELECTOR = 'section[aria-label="Tu cuenta del directo"]';
 const LOGIN_PATTERN = /inicia(?:r)? sesi[oó]n/i;
@@ -99,22 +104,74 @@ function readSessionFromDom(doc = document) {
   return { known: false, loggedIn: false, reason: "unknown" };
 }
 
-// expectedOrigin (opcional): origin de la URL que se está comprobando. Con él,
-// una sesión guardada desde otro target (p. ej. la copia local) no cuenta.
-// Sin él, vale cualquier origen de target conocido (p. ej. el badge).
-export async function getSessionState(expectedOrigin = null) {
-  try {
-    const stored = await chrome.storage.local.get(SESSION_KEY);
-    const session = normalizeSession(stored[SESSION_KEY]);
-    const validOrigin =
-      session.origin !== null && isKnownTargetOrigin(session.origin);
+function sessionKey(origin) {
+  return SESSION_PREFIX + origin;
+}
 
-    if (!validOrigin) return defaultSession();
-    if (expectedOrigin && session.origin !== expectedOrigin) {
-      return defaultSession();
+function isValidSession(session) {
+  return session.origin !== null && isKnownTargetOrigin(session.origin);
+}
+
+// Migra el slot único de <= v1.5.0 a la clave por origin. Idempotente: si la
+// clave vieja no existe, no hace nada.
+async function migrateLegacySession() {
+  try {
+    const stored = await chrome.storage.local.get(LEGACY_SESSION_KEY);
+
+    if (stored[LEGACY_SESSION_KEY] === undefined) return;
+
+    const legacy = normalizeSession(stored[LEGACY_SESSION_KEY]);
+
+    if (isValidSession(legacy)) {
+      const key = sessionKey(legacy.origin);
+      const existing = await chrome.storage.local.get(key);
+
+      if (existing[key] === undefined) {
+        await chrome.storage.local.set({ [key]: legacy });
+      }
     }
 
-    return session;
+    await chrome.storage.local.remove(LEGACY_SESSION_KEY);
+  } catch {
+    // Sin migración: la próxima detección de sesión escribe el slot nuevo.
+  }
+}
+
+let legacyMigration = null;
+
+function migrateLegacySessionOnce() {
+  if (!legacyMigration) {
+    legacyMigration = migrateLegacySession();
+  }
+
+  return legacyMigration;
+}
+
+// expectedOrigin (opcional): origin de la URL que se está comprobando. Con él
+// se lee solo el slot de ese origen. Sin él (p. ej. el badge) se prefiere el
+// slot de producción y, si no existe, el primero válido.
+export async function getSessionState(expectedOrigin = null) {
+  try {
+    await migrateLegacySessionOnce();
+
+    if (typeof expectedOrigin === "string" && expectedOrigin.length > 0) {
+      const key = sessionKey(expectedOrigin);
+      const stored = await chrome.storage.local.get(key);
+      const session = normalizeSession(stored[key]);
+
+      return session.origin === expectedOrigin && isValidSession(session)
+        ? session
+        : defaultSession();
+    }
+
+    const all = await chrome.storage.local.get(null);
+    const sessions = Object.entries(all)
+      .filter(([key]) => key.startsWith(SESSION_PREFIX))
+      .map(([, value]) => normalizeSession(value))
+      .filter(isValidSession);
+
+    const production = sessions.find((s) => s.origin === PRODUCTION_ORIGIN);
+    return production ?? sessions[0] ?? defaultSession();
   } catch (error) {
     warn("No se pudo leer la sesión:", error);
     return defaultSession();
@@ -128,7 +185,7 @@ async function saveSessionState(session) {
     updatedAt: Date.now(),
   };
 
-  await chrome.storage.local.set({ [SESSION_KEY]: next });
+  await chrome.storage.local.set({ [sessionKey(location.origin)]: next });
   return next;
 }
 
@@ -138,15 +195,17 @@ export function watchSession(callback) {
   }
 
   const listener = (changes, areaName) => {
-    if (areaName !== "local" || !changes[SESSION_KEY]) return;
+    if (areaName !== "local") return;
 
-    const session = normalizeSession(changes[SESSION_KEY].newValue);
+    for (const [key, change] of Object.entries(changes)) {
+      if (!key.startsWith(SESSION_PREFIX)) continue;
 
-    if (session.origin === null || !isKnownTargetOrigin(session.origin)) {
-      return;
+      const session = normalizeSession(change.newValue);
+
+      if (isValidSession(session)) {
+        callback(session);
+      }
     }
-
-    callback(session);
   };
 
   chrome.storage.onChanged.addListener(listener);
