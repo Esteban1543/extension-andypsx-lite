@@ -52,6 +52,10 @@
       );
     }
 
+    // Deben existir antes de connectKeepAlive(): runtimeAvailable() los lee.
+    let runtimeDead = false;
+    let stopped = false;
+
     // Keep-alive: un puerto de larga duración mantiene despierto al service
     // worker mientras este content script esté vivo. Reconecta si se cierra.
     let keepAlivePort = null;
@@ -99,8 +103,6 @@
     let pending = false;
     let queue = Promise.resolve();
     let refreshToken = 0;
-    let stopped = false;
-    let runtimeDead = false;
     let urlInterval = null;
     let cssInterval = null;
     let aliveInterval = null;
