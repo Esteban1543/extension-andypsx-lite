@@ -408,6 +408,11 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 // ─── el content script avisa cuando detecta login/logout ────────────────────
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "ping") {
+    sendResponse({ ok: true });
+    return false;
+  }
+
   if (message?.type === "modules:sync") {
     restart()
       .then(() => sendResponse({ ok: true }))

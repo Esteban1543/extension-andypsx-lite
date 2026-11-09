@@ -401,8 +401,13 @@ export function init(ctx) {
     return false;
   }
 
-  chrome.runtime.onMessage.addListener(handleScanRequest);
-  moduleState.scanListener = handleScanRequest;
+  try {
+    chrome.runtime?.onMessage?.addListener?.(handleScanRequest);
+    moduleState.scanListener = handleScanRequest;
+  } catch {
+    // Contexto invalidado: el content script se detendrá en el próximo tick.
+    moduleState.scanListener = null;
+  }
 
   scan();
 }
@@ -417,7 +422,11 @@ export function destroy() {
   window.clearTimeout(moduleState.scanTimer);
 
   if (moduleState.scanListener) {
-    chrome.runtime.onMessage.removeListener(moduleState.scanListener);
+    try {
+      chrome.runtime?.onMessage?.removeListener?.(moduleState.scanListener);
+    } catch {
+      // Contexto ya invalidado: no hay listener que quitar.
+    }
   }
 
   activeState = null;

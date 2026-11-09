@@ -26,7 +26,14 @@
   }
 
   run().catch((error) => {
+    const message = error?.message ?? String(error);
+
+    // Contexto invalidado (extensión recargada/actualizada): silencio total.
+    if (/extension context invalidated|cannot read properties of undefined \(reading '(sendMessage|storage|runtime|onMessage|tabs|scripting|alarms|local|sync|id)'\)/i.test(message)) {
+      return;
+    }
+
     // Sin stack: el stack delata el ID de la extensión y rutas internas.
-    console.error("Extension:", error?.message ?? String(error));
+    console.error("Extension:", message);
   });
 })();

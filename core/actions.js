@@ -1,5 +1,18 @@
 const POINTER_MOVE_STEPS = 4;
 
+// Falso cuando la extensión se recarga/actualiza con la pestaña abierta: el
+// content script viejo conserva su mundo aislado pero pierde chrome.runtime.
+function backgroundAvailable() {
+  try {
+    return (
+      typeof globalThis.chrome !== "undefined" &&
+      typeof globalThis.chrome.runtime?.sendMessage === "function"
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function wait(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
@@ -8,6 +21,12 @@ export function wait(milliseconds) {
 // porque en una pestaña en segundo plano los setTimeout se ahogan (≥1 s, y tras
 // minutos a ~1/min). Si el background no responde, cae a la espera local.
 export async function waitForRaffleDelay(milliseconds) {
+  // Si el contexto de la extensión está invalidado, espera local directamente.
+  if (!backgroundAvailable()) {
+    await wait(milliseconds);
+    return;
+  }
+
   try {
     const response = await chrome.runtime.sendMessage({
       type: "wait:alarm",
@@ -149,6 +168,9 @@ export async function humanClick(element, { shouldStop = () => false } = {}) {
 export async function trustedHumanClick(element, { shouldStop = () => false } = {}) {
   const plan = await prepareClick(element, shouldStop);
   if (!plan || shouldStop()) return false;
+
+  // Contexto invalidado: no hay quién ejecute el clic trusted; se omite.
+  if (!backgroundAvailable()) return false;
 
   let response;
 

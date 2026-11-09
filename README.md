@@ -297,6 +297,13 @@ Para que nada se duerma con muchas pestañas o el perfil en segundo plano:
   no un reemplazo. El escaneo es de solo lectura: no crea atributos, nodos ni
   ninguna huella nueva en la página. El listener solo existe mientras el módulo
   Raffles está activo y se elimina al desactivarlo.
+- **Contexto invalidado**: si recargas o actualizas la extensión con la pestaña
+  abierta, el content script viejo pierde su `chrome.runtime`. Un chequeo
+  ligero (`ping` cada 3 s) lo detecta, desmonta módulos y temporizadores y se
+  detiene en silencio. Así no aparecen errores `Cannot read properties of
+  undefined (reading 'sendMessage')` ni `Extension context invalidated` en la
+  página. Para que la pestaña vuelva a tener la extensión activa, recárgala
+  (F5); el content script nuevo se inyecta solo.
 
 Límites honestos: el keep-alive es *best-effort* (MV3 está pensado para
 suspender el SW), y una pestaña **congelada del todo** retrasa el clic hasta
@@ -555,7 +562,7 @@ del splash del sitio explicaba la diferencia 4 vs 5 del informe anterior.
 
 ```bash
 cd /home/manager/Downloads
-zip -r andypsx-extension-v1.6.1.zip andypsx-extension-v1.0.4 \
+zip -r andypsx-extension-v1.6.2.zip andypsx-extension-v1.0.4 \
   -x '*/.git/*' '*/__pycache__/*'
 ```
 

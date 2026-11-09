@@ -17,6 +17,25 @@ const RECONNECT_PATTERN =
 const SESSION_CHECK_INTERVAL_MS = 2000;
 const SESSION_DEBOUNCE_MS = 250;
 
+// Falso cuando la extensión se recarga/actualiza con la pestaña abierta.
+function extensionRuntimeAlive() {
+  try {
+    return (
+      typeof globalThis.chrome !== "undefined" &&
+      typeof globalThis.chrome.runtime?.sendMessage === "function"
+    );
+  } catch {
+    return false;
+  }
+}
+
+function isInvalidatedError(error) {
+  const message = error?.message ?? String(error);
+  return /extension context invalidated|cannot read properties of undefined \(reading '(sendMessage|storage|runtime|onMessage|tabs|scripting|alarms|local|sync|id)'\)/i.test(
+    message,
+  );
+}
+
 function isRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -173,6 +192,7 @@ export async function getSessionState(expectedOrigin = null) {
     const production = sessions.find((s) => s.origin === PRODUCTION_ORIGIN);
     return production ?? sessions[0] ?? defaultSession();
   } catch (error) {
+    if (isInvalidatedError(error)) throw error;
     warn("No se pudo leer la sesión:", error);
     return defaultSession();
   }
@@ -240,6 +260,12 @@ export function startSessionWatcher({ onChange, shouldCheck = () => true } = {})
   async function readAndSave() {
     if (stopped || !shouldCheck()) return null;
 
+    // Contexto invalidado: no hay chrome.* que usar; detener sin warnings.
+    if (!extensionRuntimeAlive()) {
+      stopped = true;
+      return null;
+    }
+
     const domSession = readSessionFromDom(document);
     const changed =
       !last ||
@@ -254,6 +280,11 @@ export function startSessionWatcher({ onChange, shouldCheck = () => true } = {})
     try {
       await saveSessionState(domSession);
     } catch (error) {
+      if (isInvalidatedError(error)) {
+        stopped = true;
+        return null;
+      }
+
       warn("No se pudo guardar la sesión:", error);
       return { ...domSession, origin: location.origin, updatedAt: Date.now() };
     }
@@ -346,7 +377,12 @@ export function startSessionWatcher({ onChange, shouldCheck = () => true } = {})
       window.clearTimeout(debounceTimer);
       window.removeEventListener("pageshow", scheduleCheck);
       document.removeEventListener("visibilitychange", handleVisibility);
-      chrome.runtime.onMessage.removeListener(messageListener);
+
+      try {
+        chrome.runtime?.onMessage?.removeListener?.(messageListener);
+      } catch {
+        // Contexto ya invalidado: no hay listener que quitar.
+      }
     },
   };
 }
