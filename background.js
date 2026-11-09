@@ -403,7 +403,11 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   if (!respond) return;
 
   pendingWaits.delete(alarm.name);
-  respond({ ok: true });
+  try {
+    respond({ ok: true });
+  } catch {
+    // La pestaña se cerró o navegó; su espera local ya cubre el caso.
+  }
 });
 
 // ─── el content script avisa cuando detecta login/logout ────────────────────
@@ -476,7 +480,24 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .slice(2)}`;
 
     pendingWaits.set(name, sendResponse);
-    chrome.alarms.create(name, { when: Date.now() + delayMs });
+
+    const failWait = () => {
+      if (!pendingWaits.delete(name)) return;
+      try {
+        sendResponse({ ok: false, error: "alarm-failed" });
+      } catch {
+        // El canal ya se cerró.
+      }
+    };
+
+    try {
+      Promise.resolve(
+        chrome.alarms.create(name, { when: Date.now() + delayMs }),
+      ).catch(failWait);
+    } catch {
+      failWait();
+    }
+
     return true;
   }
 

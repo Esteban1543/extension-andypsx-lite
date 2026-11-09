@@ -289,8 +289,10 @@ Para que nada se duerma con muchas pestañas o el perfil en segundo plano:
 - **Esperas de raffles con `chrome.alarms`**: la espera de 5–10 s / 2–5 s se
   programa en el background (`wait:alarm`), no con `setTimeout` en la pestaña.
   En una pestaña en segundo plano los timers se ahogan (≥1 s, tras minutos a
-  ~1/min); las alarmas no. Si el background no responde, el módulo cae a la
-  espera local de siempre.
+  ~1/min); las alarmas no. Si la alarma falla o no responde (p. ej. el service
+  worker se reinicia y pierde la espera), a los `espera + 2 s` el módulo
+  completa la espera local y hace el clic igualmente: la cola nunca se queda
+  colgada.
 - **Latido de escaneo (`scan`)**: cada 30 s el background pide un `scan()` a
   las pestañas objetivo (`scan:request`). Es un refuerzo al `MutationObserver`
   para que la detección de raffles nuevos siga siendo regular en segundo plano,
@@ -562,7 +564,7 @@ del splash del sitio explicaba la diferencia 4 vs 5 del informe anterior.
 
 ```bash
 cd /home/manager/Downloads
-zip -r andypsx-extension-v1.6.2.zip andypsx-extension-v1.0.4 \
+zip -r andypsx-extension-v1.6.3.zip andypsx-extension-v1.0.4 \
   -x '*/.git/*' '*/__pycache__/*'
 ```
 

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AndyPSX Live · Vista Limpia",
-  "version": "1.6.2",
+  "version": "1.6.3",
   "description": "Reordena andypsx.com/live con sesión iniciada y participa en raffles sin contraseña. CSS + content script aislado.",
   "permissions": ["storage", "tabs", "scripting", "debugger", "alarms"],
   "host_permissions": [

@@ -20,25 +20,33 @@ export function wait(milliseconds) {
 // Esperas largas de raffles: se programan en el background con chrome.alarms
 // porque en una pestaña en segundo plano los setTimeout se ahogan (≥1 s, y tras
 // minutos a ~1/min). Si el background no responde, cae a la espera local.
+// Margen sobre la espera pedida antes de dar la alarma por perdida.
+const ALARM_GRACE_MS = 2000;
+
 export async function waitForRaffleDelay(milliseconds) {
+  const delayMs = Math.max(0, Math.round(milliseconds));
+  const startedAt = Date.now();
+
   // Si el contexto de la extensión está invalidado, espera local directamente.
   if (!backgroundAvailable()) {
-    await wait(milliseconds);
+    await wait(delayMs);
     return;
   }
 
-  try {
-    const response = await chrome.runtime.sendMessage({
-      type: "wait:alarm",
-      delayMs: Math.max(0, Math.round(milliseconds)),
-    });
+  // La alarma puede no responder nunca (create falla, el service worker se
+  // reinicia y pierde la espera pendiente). Sin este límite la cola de
+  // raffles quedaba colgada y no llegaba a hacer clic.
+  const alarm = chrome.runtime
+    .sendMessage({ type: "wait:alarm", delayMs })
+    .then((response) => response?.ok === true)
+    .catch(() => false);
+  const timeout = wait(delayMs + ALARM_GRACE_MS).then(() => false);
 
-    if (response?.ok === true) return;
-  } catch {
-    // Background inalcanzable o canal cerrado: espera local como antes.
-  }
+  if (await Promise.race([alarm, timeout])) return;
 
-  await wait(milliseconds);
+  // Fallo o sin respuesta: completa solo lo que falte de la espera original.
+  const remaining = delayMs - (Date.now() - startedAt);
+  if (remaining > 0) await wait(remaining);
 }
 
 export function randomBetween(min, max) {
