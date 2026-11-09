@@ -139,6 +139,7 @@ export function init(ctx) {
   const moduleState = {
     observer: null,
     scanTimer: null,
+    scanListener: null,
     tracked: new Map(),
     records: new WeakMap(),
     nextId: 1,
@@ -385,6 +386,24 @@ export function init(ctx) {
     moduleState.observer.observe(root, { childList: true, subtree: true });
   }
 
+  // Latido de escaneo por alarma del background: refuerzo al observer para que
+  // la detección siga siendo regular con la pestaña en segundo plano.
+  function handleScanRequest(message, sender, sendResponse) {
+    if (message?.type !== "scan:request") return false;
+
+    if (moduleState.stopped) {
+      sendResponse({ ok: false, stopped: true });
+      return false;
+    }
+
+    scan();
+    sendResponse({ ok: true, count: moduleState.tracked.size });
+    return false;
+  }
+
+  chrome.runtime.onMessage.addListener(handleScanRequest);
+  moduleState.scanListener = handleScanRequest;
+
   scan();
 }
 
@@ -396,6 +415,10 @@ export function destroy() {
   moduleState.queue.length = 0;
   moduleState.observer?.disconnect();
   window.clearTimeout(moduleState.scanTimer);
+
+  if (moduleState.scanListener) {
+    chrome.runtime.onMessage.removeListener(moduleState.scanListener);
+  }
 
   activeState = null;
 }

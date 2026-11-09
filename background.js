@@ -382,6 +382,23 @@ chrome.alarms.onAlarm.addListener((alarm) => {
     return;
   }
 
+  if (alarm.name === "scan") {
+    // Latido de escaneo: pide un scan() a cada pestaña objetivo para que la
+    // detección de raffles siga siendo regular en segundo plano.
+    void (async () => {
+      const tabs = await targetTabs();
+
+      await Promise.all(
+        tabs.map((tab) =>
+          chrome.tabs
+            .sendMessage(tab.id, { type: "scan:request" })
+            .catch(() => {}),
+        ),
+      );
+    })();
+    return;
+  }
+
   const respond = pendingWaits.get(alarm.name);
   if (!respond) return;
 
@@ -496,5 +513,6 @@ watchSession(() => {
 
 void initLogger();
 chrome.alarms.create("keepalive", { periodInMinutes: 0.5 });
+chrome.alarms.create("scan", { periodInMinutes: 0.5 });
 
 ready = restart();
