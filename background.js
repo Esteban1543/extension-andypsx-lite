@@ -19,8 +19,11 @@ const modules = (Array.isArray(rawModules) ? rawModules : []).filter(
 );
 
 const sessionKnownTabs = new Set();
+const undiscardableTabs = new Set();
+const pendingWaits = new Map();
 const MAX_CLICK_MOVES = 12;
 const MAX_CLICK_DELAY_MS = 1000;
+const MAX_RAFFLE_WAIT_MS = 60000;
 let ready = Promise.resolve();
 
 function logError(message, detail) {
@@ -36,6 +39,18 @@ function originOf(url) {
     return new URL(url).origin;
   } catch {
     return null;
+  }
+}
+
+// B1: evita que Chrome descarte la pestaña por memoria (Memory Saver).
+async function keepTabAlive(tabId) {
+  if (undiscardableTabs.has(tabId)) return;
+
+  try {
+    await chrome.tabs.update(tabId, { autoDiscardable: false });
+    undiscardableTabs.add(tabId);
+  } catch {
+    // La pestaña puede haberse cerrado.
   }
 }
 
@@ -229,6 +244,7 @@ async function injectSessionProbe(tabId) {
 }
 
 async function ensureTabSession(tabId, url) {
+  void keepTabAlive(tabId);
   if (sessionKnownTabs.has(tabId)) return;
 
   let session = await requestTabSession(tabId, url);
@@ -311,6 +327,7 @@ function restart() {
 }
 
 async function applyToTab(tabId, url) {
+  void keepTabAlive(tabId);
   await ready.catch(() => {});
   await syncTab(tabId, url, () => getStatesForTab(tabId, url), modules);
 }
@@ -339,6 +356,36 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   sessionKnownTabs.delete(tabId);
+  undiscardableTabs.delete(tabId);
+
+  // Cancela esperas de raffles pendientes de esa pestaña.
+  for (const name of pendingWaits.keys()) {
+    if (name.startsWith(`wait:${tabId}:`)) {
+      pendingWaits.delete(name);
+      chrome.alarms.clear(name);
+    }
+  }
+});
+
+// A1: acepta el puerto keep-alive del content script. Mientras esté abierto,
+// el service worker no se suspende.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "keepalive") return;
+  port.onDisconnect.addListener(() => {});
+});
+
+// A2 + B2: un único listener de alarmas para el latido y las esperas de raffles.
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === "keepalive") {
+    // Latido: despierta al SW si el puerto keep-alive se cerró.
+    return;
+  }
+
+  const respond = pendingWaits.get(alarm.name);
+  if (!respond) return;
+
+  pendingWaits.delete(alarm.name);
+  respond({ ok: true });
 });
 
 // ─── el content script avisa cuando detecta login/logout ────────────────────
@@ -389,6 +436,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  // B2: esperas de raffles programadas aquí, no en la pestaña (los setTimeout
+  // de una pestaña en segundo plano se ahogan). Responde al disparar la alarma.
+  if (message?.type === "wait:alarm") {
+    const delayMs = finiteNumber(message.delayMs)
+      ? Math.max(0, Math.min(message.delayMs, MAX_RAFFLE_WAIT_MS))
+      : null;
+
+    if (delayMs === null) {
+      sendResponse({ ok: false, error: "invalid-delay" });
+      return false;
+    }
+
+    const name = `wait:${sender.tab?.id ?? "sw"}:${Date.now()}:${Math.random()
+      .toString(36)
+      .slice(2)}`;
+
+    pendingWaits.set(name, sendResponse);
+    chrome.alarms.create(name, { when: Date.now() + delayMs });
+    return true;
+  }
+
   if (message?.type !== "session:update") return false;
 
   const tabId = sender.tab?.id;
@@ -426,5 +494,6 @@ watchSession(() => {
 });
 
 void initLogger();
+chrome.alarms.create("keepalive", { periodInMinutes: 0.5 });
 
 ready = restart();

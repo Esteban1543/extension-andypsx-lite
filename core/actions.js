@@ -4,6 +4,24 @@ export function wait(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
+// Esperas largas de raffles: se programan en el background con chrome.alarms
+// porque en una pestaña en segundo plano los setTimeout se ahogan (≥1 s, y tras
+// minutos a ~1/min). Si el background no responde, cae a la espera local.
+export async function waitForRaffleDelay(milliseconds) {
+  try {
+    const response = await chrome.runtime.sendMessage({
+      type: "wait:alarm",
+      delayMs: Math.max(0, Math.round(milliseconds)),
+    });
+
+    if (response?.ok === true) return;
+  } catch {
+    // Background inalcanzable o canal cerrado: espera local como antes.
+  }
+
+  await wait(milliseconds);
+}
+
 export function randomBetween(min, max) {
   return min + Math.random() * (max - min);
 }

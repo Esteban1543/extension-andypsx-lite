@@ -3,7 +3,7 @@ import {
   isButtonDisabled,
   randomBetween,
   trustedHumanClick,
-  wait,
+  waitForRaffleDelay,
 } from "../../core/actions.js";
 
 const RAFFLE_SELECTOR = 'section[aria-label^="Raffle:"]';
@@ -193,7 +193,7 @@ export function init(ctx) {
     record.delayMs = Math.round(delayMs);
     ctx.log(`Esperando ${formatSeconds(delayMs)} antes de participar:`, title);
 
-    await wait(delayMs);
+    await waitForRaffleDelay(delayMs);
     if (moduleState.stopped) return false;
 
     if (!button.isConnected) {

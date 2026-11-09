@@ -27,6 +27,32 @@
 
     await logModule.initLogger();
 
+    // Keep-alive: un puerto de larga duración mantiene despierto al service
+    // worker mientras este content script esté vivo. Reconecta si se cierra.
+    let keepAlivePort = null;
+    let keepAliveRetries = 0;
+
+    function connectKeepAlive() {
+      const retryDelay = Math.min(1000 * (keepAliveRetries + 1), 5000);
+
+      try {
+        keepAlivePort = chrome.runtime.connect({ name: "keepalive" });
+        keepAliveRetries = 0;
+
+        keepAlivePort.onDisconnect.addListener(() => {
+          keepAlivePort = null;
+          keepAliveRetries += 1;
+          window.setTimeout(connectKeepAlive, retryDelay);
+        });
+      } catch {
+        keepAlivePort = null;
+        keepAliveRetries += 1;
+        window.setTimeout(connectKeepAlive, retryDelay);
+      }
+    }
+
+    connectKeepAlive();
+
     const modules = Array.isArray(moduleIndex.modules)
       ? moduleIndex.modules
       : [];

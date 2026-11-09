@@ -274,6 +274,30 @@ sesión, o abre `https://andypsx.com/live` en un navegador sin cookies.
 - Si no se puede comprobar la sesión, Vista limpia queda apagada.
 - El login de la cabecera y el login de Kick no cuentan.
 
+### Segundo plano y keep-alive
+
+Para que nada se duerma con muchas pestañas o el perfil en segundo plano:
+
+- **Puerto `keepalive`**: el content script abre `chrome.runtime.connect` y lo
+  reconecta si se cierra. Un canal de larga duración mantiene despierto al
+  service worker (comportamiento de MV3), así `css:ensure` y `trusted-click`
+  responden al instante.
+- **Latido con `chrome.alarms`** cada 30 s como respaldo: despierta al SW si el
+  puerto se cerró. Permiso `alarms` declarado en el manifest.
+- **`autoDiscardable: false`** en las pestañas objetivo: Chrome no las descarta
+  por memoria (Memory Saver), así el DOM y la cola de raffles no se congelan.
+- **Esperas de raffles con `chrome.alarms`**: la espera de 5–10 s / 2–5 s se
+  programa en el background (`wait:alarm`), no con `setTimeout` en la pestaña.
+  En una pestaña en segundo plano los timers se ahogan (≥1 s, tras minutos a
+  ~1/min); las alarmas no. Si el background no responde, el módulo cae a la
+  espera local de siempre.
+
+Límites honestos: el keep-alive es *best-effort* (MV3 está pensado para
+suspender el SW), y una pestaña **congelada del todo** retrasa el clic hasta
+que descongela — `autoDiscardable` evita el descarte, no el congelamiento.
+El Modo de Eficiencia de Windows (Process Lasso) cubre el lado del SO; esto
+cubre el lado del navegador.
+
 ### Migración desde v1.0.x
 
 La versión antigua guardaba un booleano en `andypsxLiveEnabled`. Al leer el
@@ -525,7 +549,7 @@ del splash del sitio explicaba la diferencia 4 vs 5 del informe anterior.
 
 ```bash
 cd /home/manager/Downloads
-zip -r andypsx-extension-v1.5.1.zip andypsx-extension-v1.0.4 \
+zip -r andypsx-extension-v1.6.0.zip andypsx-extension-v1.0.4 \
   -x '*/.git/*' '*/__pycache__/*'
 ```
 
