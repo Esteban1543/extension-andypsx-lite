@@ -19,7 +19,6 @@ const modules = (Array.isArray(rawModules) ? rawModules : []).filter(
 );
 
 const sessionKnownTabs = new Set();
-const undiscardableTabs = new Set();
 const pendingWaits = new Map();
 const MAX_CLICK_MOVES = 12;
 const MAX_CLICK_DELAY_MS = 1000;
@@ -43,14 +42,16 @@ function originOf(url) {
 }
 
 // B1: evita que Chrome descarte la pestaña por memoria (Memory Saver).
+// Se aplica de forma idempotente cada vez: sin estado que pueda quedar viejo
+// si el service worker se reinicia o la propiedad cambia por otro camino.
 async function keepTabAlive(tabId) {
-  if (undiscardableTabs.has(tabId)) return;
-
   try {
     await chrome.tabs.update(tabId, { autoDiscardable: false });
-    undiscardableTabs.add(tabId);
-  } catch {
-    // La pestaña puede haberse cerrado.
+  } catch (error) {
+    debug(
+      `keepTabAlive(${tabId}) falló:`,
+      error instanceof Error ? error.message : String(error),
+    );
   }
 }
 
@@ -356,7 +357,6 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 
 chrome.tabs.onRemoved.addListener((tabId) => {
   sessionKnownTabs.delete(tabId);
-  undiscardableTabs.delete(tabId);
 
   // Cancela esperas de raffles pendientes de esa pestaña.
   for (const name of pendingWaits.keys()) {
