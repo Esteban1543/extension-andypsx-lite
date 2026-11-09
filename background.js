@@ -45,6 +45,7 @@ function originOf(url) {
 // Se aplica de forma idempotente cada vez: sin estado que pueda quedar viejo
 // si el service worker se reinicia o la propiedad cambia por otro camino.
 async function keepTabAlive(tabId) {
+  debug(`keepTabAlive(${tabId})`);
   try {
     await chrome.tabs.update(tabId, { autoDiscardable: false });
   } catch (error) {
