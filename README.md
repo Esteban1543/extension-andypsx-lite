@@ -293,6 +293,12 @@ Para que nada se duerma con muchas pestañas o el perfil en segundo plano:
   worker se reinicia y pierde la espera), a los `espera + 2 s` el módulo
   completa la espera local y hace el clic igualmente: la cola nunca se queda
   colgada.
+- **Micro-esperas por el background con la página oculta** (v1.6.4): los ~10
+  pasos cortos del clic (preparación, movimientos, hover, press, release) y el
+  retraso de escaneo de 150 ms usan, solo cuando `document.hidden` es true,
+  una espera del service worker (`wait:short`) en lugar de `setTimeout` de la
+  pestaña. Medido con la pestaña oculta >5 min: el clic pasaba de ~88 s a ~8 s.
+  Con la página visible, todo funciona igual que antes.
 - **Latido de escaneo (`scan`)**: cada 30 s el background pide un `scan()` a
   las pestañas objetivo (`scan:request`). Es un refuerzo al `MutationObserver`
   para que la detección de raffles nuevos siga siendo regular en segundo plano,
@@ -312,6 +318,44 @@ suspender el SW), y una pestaña **congelada del todo** retrasa el clic hasta
 que descongela — `autoDiscardable` evita el descarte, no el congelamiento.
 El Modo de Eficiencia de Windows (Process Lasso) cubre el lado del SO; esto
 cubre el lado del navegador.
+
+### AdsPower: parámetros para que el perfil no se duerma
+
+Con muchos perfiles abiertos y ventanas tapadas, Chrome frena los timers de
+las páginas ocultas (tras 5 min, cadenas de timers a ~1 por minuto) y baja la
+prioridad de los renderers de ventanas ocluidas. La extensión ya mitiga su
+parte (v1.6.4), pero el navegador se controla con **Launch Args**.
+
+En AdsPower (documentación oficial: «Launch Args» en Fingerprint Settings;
+edición masiva en Profiles → ⋮ → Edit fingerprint → Launch Args; o por API
+local con el parámetro `launch_args` de `/api/v1/browser/start` y
+`/api/v2/browser-profile/start`), añade a cada perfil:
+
+```text
+--disable-background-timer-throttling
+--disable-renderer-backgrounding
+--disable-backgrounding-occluded-windows
+```
+
+**Importante — `--disable-features`:** AdsPower ya pasa su propia lista
+(p. ej. `FlashDeprecationWarning,EnablePasswordsAccountStorage,...`). Si
+añades un segundo `--disable-features`, Chromium solo usa uno de los dos y
+se pierde la otra lista. La lista combinada debe ir en un único switch; añade
+`IntensiveWakeUpThrottling,CalculateNativeWinOcclusion` a la lista que ya
+trae tu núcleo (cópiala de `chrome://version` → Command Line).
+
+Después de aplicar, verifica en `chrome://version` → Command Line que los
+tres switches anteriores aparecen, y desactiva **Memory Saver** y **Energy
+Saver** en `chrome://settings/performance` del perfil.
+
+Medido en Chromium real con la pestaña oculta >5 min: sin flags, cadenas de
+timers a ~1/min (un clic del build anterior tardó 88 s); con los flags,
+cadencia completa (90 ticks/90 s) y clic en ~8 s.
+
+Límites honestos: la congelación de pestañas ocluidas de Windows no se pudo
+reproducir en el laboratorio Linux, así que `CalculateNativeWinOcclusion` va
+por documentación de Chromium, no por medición propia. Si Windows manda el
+proceso a eficiencia, eso lo cubre Process Lasso, no la extensión.
 
 ### Migración desde v1.0.x
 
@@ -564,7 +608,7 @@ del splash del sitio explicaba la diferencia 4 vs 5 del informe anterior.
 
 ```bash
 cd /home/manager/Downloads
-zip -r andypsx-extension-v1.6.3.zip andypsx-extension-v1.0.4 \
+zip -r andypsx-extension-v1.6.4.zip andypsx-extension-v1.0.4 \
   -x '*/.git/*' '*/__pycache__/*'
 ```
 

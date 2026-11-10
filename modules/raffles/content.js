@@ -2,6 +2,7 @@ import {
   humanClick,
   isButtonDisabled,
   randomBetween,
+  shortWait,
   trustedHumanClick,
   waitForRaffleDelay,
 } from "../../core/actions.js";
@@ -139,6 +140,7 @@ export function init(ctx) {
   const moduleState = {
     observer: null,
     scanTimer: null,
+    hiddenScanPending: false,
     scanListener: null,
     tracked: new Map(),
     records: new WeakMap(),
@@ -358,6 +360,19 @@ export function init(ctx) {
   }
 
   function scheduleScan() {
+    // Oculta: el setTimeout de la pestaña puede tardar hasta ~1 min en
+    // dispararse. Se agrupan las mutaciones con una espera del background.
+    if (document.hidden) {
+      if (moduleState.hiddenScanPending) return;
+      moduleState.hiddenScanPending = true;
+
+      void shortWait(SCAN_DELAY_MS).then(() => {
+        moduleState.hiddenScanPending = false;
+        if (!moduleState.stopped) scan();
+      });
+      return;
+    }
+
     window.clearTimeout(moduleState.scanTimer);
     moduleState.scanTimer = window.setTimeout(scan, SCAN_DELAY_MS);
   }

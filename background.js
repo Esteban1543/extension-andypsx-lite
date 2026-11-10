@@ -23,6 +23,7 @@ const pendingWaits = new Map();
 const MAX_CLICK_MOVES = 12;
 const MAX_CLICK_DELAY_MS = 1000;
 const MAX_RAFFLE_WAIT_MS = 60000;
+const MAX_SHORT_WAIT_MS = 2000;
 let ready = Promise.resolve();
 
 function logError(message, detail) {
@@ -460,6 +461,28 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         logError("No se pudo hacer el clic confiable", error);
         sendResponse({ ok: false, error: String(error) });
       });
+    return true;
+  }
+
+  // Esperas cortas del clic/escaneo con la página oculta: el service worker
+  // no sufre el frenado de timers de las pestañas en segundo plano.
+  if (message?.type === "wait:short") {
+    const delayMs = finiteNumber(message.delayMs)
+      ? Math.max(0, Math.min(message.delayMs, MAX_SHORT_WAIT_MS))
+      : null;
+
+    if (delayMs === null) {
+      sendResponse({ ok: false, error: "invalid-delay" });
+      return false;
+    }
+
+    setTimeout(() => {
+      try {
+        sendResponse({ ok: true });
+      } catch {
+        // La pestaña se cerró o navegó.
+      }
+    }, delayMs);
     return true;
   }
 

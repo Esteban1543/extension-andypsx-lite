@@ -84,6 +84,49 @@
 
     connectKeepAlive();
 
+    // Diagnóstico (solo con debug): mide cuánto se retrasan los timers de la
+    // pestaña. Sirve para comprobar en el navegador real si Chrome la frena
+    // (sin flags, oculta >5 min: retrasos de decenas de segundos).
+    function startThrottleProbe() {
+      if (!logModule.isDebugEnabled()) return;
+
+      const STEP_MS = 1000;
+      const REPORT_MS = 60000;
+      let expected = Date.now() + STEP_MS;
+      let maxLateMs = 0;
+      let lastReport = Date.now();
+      let hiddenSince = document.hidden ? Date.now() : null;
+
+      document.addEventListener("visibilitychange", () => {
+        hiddenSince = document.hidden ? Date.now() : null;
+      });
+
+      const tick = () => {
+        if (stopped) return;
+
+        const now = Date.now();
+        maxLateMs = Math.max(maxLateMs, now - expected);
+
+        if (now - lastReport >= REPORT_MS) {
+          const hiddenMinutes = hiddenSince
+            ? ((now - hiddenSince) / 60000).toFixed(1)
+            : "0";
+          logModule.log(
+            `Timers: oculta ${document.hidden ? "sí" : "no"} (${hiddenMinutes} min), retraso máximo ${maxLateMs} ms.`,
+          );
+          maxLateMs = 0;
+          lastReport = now;
+        }
+
+        expected = now + STEP_MS;
+        window.setTimeout(tick, STEP_MS);
+      };
+
+      window.setTimeout(tick, STEP_MS);
+    }
+
+    startThrottleProbe();
+
     const modules = Array.isArray(moduleIndex.modules)
       ? moduleIndex.modules
       : [];

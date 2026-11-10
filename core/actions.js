@@ -1,4 +1,6 @@
 const POINTER_MOVE_STEPS = 4;
+// Margen sobre la espera pedida antes de dar la respuesta del background por perdida.
+const ALARM_GRACE_MS = 2000;
 
 // Falso cuando la extensión se recarga/actualiza con la pestaña abierta: el
 // content script viejo conserva su mundo aislado pero pierde chrome.runtime.
@@ -17,15 +19,44 @@ export function wait(milliseconds) {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
+// Pide al background una espera y responde true si llegó a tiempo. Si no
+// responde en delay + 2 s, completa en local lo que falte de la espera.
+async function backgroundWait(type, delayMs) {
+  const startedAt = Date.now();
+
+  const viaBackground = chrome.runtime
+    .sendMessage({ type, delayMs })
+    .then((response) => response?.ok === true)
+    .catch(() => false);
+  const timeout = wait(delayMs + ALARM_GRACE_MS).then(() => false);
+
+  if (await Promise.race([viaBackground, timeout])) return;
+
+  const remaining = delayMs - (Date.now() - startedAt);
+  if (remaining > 0) await wait(remaining);
+}
+
+// Esperas cortas del flujo de clic y del escaneo. Con la página oculta,
+// Chrome agrupa los setTimeout encadenados de la pestaña (1/s y, tras 5 min
+// oculta, ~1/min): los ~10 pasos de un clic podían tardar varios minutos.
+// El service worker no sufre ese frenado, así que la espera se hace allí.
+// Con la página visible se usa el timer local de siempre.
+export async function shortWait(milliseconds) {
+  const delayMs = Math.max(0, Math.round(milliseconds));
+
+  if (!document.hidden || !backgroundAvailable()) {
+    await wait(delayMs);
+    return;
+  }
+
+  await backgroundWait("wait:short", delayMs);
+}
+
 // Esperas largas de raffles: se programan en el background con chrome.alarms
 // porque en una pestaña en segundo plano los setTimeout se ahogan (≥1 s, y tras
 // minutos a ~1/min). Si el background no responde, cae a la espera local.
-// Margen sobre la espera pedida antes de dar la alarma por perdida.
-const ALARM_GRACE_MS = 2000;
-
 export async function waitForRaffleDelay(milliseconds) {
   const delayMs = Math.max(0, Math.round(milliseconds));
-  const startedAt = Date.now();
 
   // Si el contexto de la extensión está invalidado, espera local directamente.
   if (!backgroundAvailable()) {
@@ -34,19 +65,9 @@ export async function waitForRaffleDelay(milliseconds) {
   }
 
   // La alarma puede no responder nunca (create falla, el service worker se
-  // reinicia y pierde la espera pendiente). Sin este límite la cola de
-  // raffles quedaba colgada y no llegaba a hacer clic.
-  const alarm = chrome.runtime
-    .sendMessage({ type: "wait:alarm", delayMs })
-    .then((response) => response?.ok === true)
-    .catch(() => false);
-  const timeout = wait(delayMs + ALARM_GRACE_MS).then(() => false);
-
-  if (await Promise.race([alarm, timeout])) return;
-
-  // Fallo o sin respuesta: completa solo lo que falte de la espera original.
-  const remaining = delayMs - (Date.now() - startedAt);
-  if (remaining > 0) await wait(remaining);
+  // reinicia y pierde la espera pendiente). backgroundWait limita la espera
+  // para que la cola de raffles nunca se quede colgada.
+  await backgroundWait("wait:alarm", delayMs);
 }
 
 export function randomBetween(min, max) {
@@ -99,7 +120,7 @@ async function prepareClick(element, shouldStop) {
   if (!element || !element.isConnected) return null;
 
   element.scrollIntoView({ block: "center", behavior: "auto" });
-  await wait(randomBetween(200, 500));
+  await shortWait(randomBetween(200, 500));
   if (shouldStop()) return null;
 
   const rect = element.getBoundingClientRect();
@@ -140,7 +161,7 @@ export async function humanClick(element, { shouldStop = () => false } = {}) {
     element.dispatchEvent(pointerEvent("pointermove", move.x, move.y, 0));
     element.dispatchEvent(mouseEvent("mousemove", move.x, move.y, 0));
 
-    await wait(move.waitMs);
+    await shortWait(move.waitMs);
   }
 
   if (shouldStop()) return false;
@@ -151,7 +172,7 @@ export async function humanClick(element, { shouldStop = () => false } = {}) {
   );
   element.dispatchEvent(mouseEvent("mouseover", plan.targetX, plan.targetY, 0));
 
-  await wait(plan.hoverWaitMs);
+  await shortWait(plan.hoverWaitMs);
   if (shouldStop()) return false;
 
   element.dispatchEvent(
@@ -159,13 +180,13 @@ export async function humanClick(element, { shouldStop = () => false } = {}) {
   );
   element.dispatchEvent(mouseEvent("mousedown", plan.targetX, plan.targetY, 1));
 
-  await wait(plan.pressWaitMs);
+  await shortWait(plan.pressWaitMs);
   if (shouldStop()) return false;
 
   element.dispatchEvent(pointerEvent("pointerup", plan.targetX, plan.targetY, 0));
   element.dispatchEvent(mouseEvent("mouseup", plan.targetX, plan.targetY, 0));
 
-  await wait(plan.releaseWaitMs);
+  await shortWait(plan.releaseWaitMs);
   if (shouldStop()) return false;
   if (!element.isConnected || isButtonDisabled(element)) return false;
 
