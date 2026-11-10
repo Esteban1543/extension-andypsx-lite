@@ -7,6 +7,6 @@ export const definition = {
   defaultEnabled: true,
   hasContent: true,
   defaultSettings: {
-    trustedClicks: false,
+    trustedClicks: true,
   },
 };

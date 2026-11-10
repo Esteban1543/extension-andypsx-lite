@@ -514,22 +514,66 @@ descriptores del mundo de la página sería más detectable todavía.
 El módulo Raffles guarda `id`, `delayMs`, `clicked` y `skipped` en memoria
 (`WeakMap`). No escribe atributos en las tarjetas del sitio.
 
-### P3 — Clics confiables opcionales
+### P3 — Clics indetectables activados por defecto
 
-Por defecto:
+Por defecto, desde v2.0.0:
 
 ```json
-"trustedClicks": false
+"trustedClicks": true
 ```
 
-En ese modo se mantiene el clic sintético actual. Los eventos tienen
-`isTrusted === false`; la página puede detectarlo.
+El módulo Raffles usa `chrome.debugger` + `Input.dispatchMouseEvent` y adjunta
+el debugger solo durante el clic: los eventos tienen `isTrusted === true`,
+como los de un ratón real.
+
+**Migración v2.0.0:** al actualizar, la extensión fuerza `trustedClicks: true`
+una sola vez (marca `migrations.trustedClicksDefaultOn` en
+`chrome.storage.sync`). Si después lo desmarcas, tu elección se respeta para
+siempre; la migración no vuelve a correr.
 
 El ajuste se controla desde el **popup**: el módulo Raffles tiene el checkbox
 «Clics indetectables (permiso debugger)». Se guarda en
 `modules.raffles.settings.trustedClicks` y el módulo lo lee en el momento del
-clic, así que aplica al raffle siguiente sin reiniciar nada. También se puede
-cambiar a mano:
+clic, así que aplica al raffle siguiente sin reiniciar nada.
+
+**Respaldo automático (no se pierde el raffle):** si el clic indetectable no
+se puede completar, ese raffle se pulsa con el clic sintético normal
+(`isTrusted: false`):
+
+| Fallo | Comportamiento |
+|---|---|
+| `chrome.debugger` no conecta o falla a mitad | Clic sintético de respaldo |
+| Algo tapa el botón justo antes de pulsar | No se pulsa nada encima; clic sintético de respaldo |
+| El botón desaparece o se deshabilita | Raffle omitido (sin clic), como siempre |
+| El clic se envía pero el botón no lo recibe | Se detecta en ≤1,5 s; clic sintético de respaldo |
+| El sitio ya registra participación | No se pulsa otra vez |
+
+**Clic verificado (D4):** justo antes de pulsar, el background pregunta a la
+pestaña si el botón sigue bajo el ratón. Si la página se movió (p. ej. salió
+un raffle nuevo encima y empujó el botón), se recalcula la posición y se
+vuelve a comprobar (máx. 3 rondas). Si el botón está tapado o no para de
+moverse, no se pulsa. Así el clic indetectable nunca cae en otro botón.
+
+**Pestañas ocultas o minimizadas:** cada comando de input hacia un renderer
+oculto puede bloquear ~5 s si se espera su confirmación, así que en ese caso
+el background despacha los eventos en pipeline (orden garantizado) y la
+verificación de impacto usa una ventana mayor (12 s). Medido con la pestaña
+oculta >5 min: clic confiable en ~10 s desde que aparece el raffle, un solo
+clic, dentro del botón.
+
+Trade-offs:
+
+- El permiso `debugger` muestra una advertencia al instalar.
+- Mientras el debugger está adjunto aparece la barra “Chrome está siendo
+  controlado por software de prueba”. El popup avisa al marcar el ajuste.
+- Si DevTools está abierto en la pestaña, `chrome.debugger.attach` puede
+  fallar; entra el respaldo sintético.
+- El clic trusted es por coordenadas, pero verificado antes de pulsar (D4).
+- El ajuste va en `chrome.storage.sync` (como el resto de la configuración de
+  módulos): si sincronizas tu cuenta en otro equipo, actívalo/apágalo allí.
+
+Para volver al clic sintético (detectable por la página), desmarca el checkbox
+del popup o fija `trustedClicks: false` a mano:
 
 ```js
 chrome.storage.sync.get("modules").then(({ modules = {} }) => {
@@ -539,28 +583,12 @@ chrome.storage.sync.get("modules").then(({ modules = {} }) => {
       ...modules,
       raffles: {
         ...raffles,
-        settings: { ...(raffles.settings ?? {}), trustedClicks: true },
+        settings: { ...(raffles.settings ?? {}), trustedClicks: false },
       },
     },
   });
 });
 ```
-
-Con `trustedClicks: true` el background usa `chrome.debugger` +
-`Input.dispatchMouseEvent` y adjunta el debugger solo durante el clic.
-
-Trade-offs:
-
-- El permiso `debugger` muestra una advertencia al instalar.
-- Mientras el debugger está adjunto aparece la barra “Chrome está siendo
-  controlado por software de prueba”. El popup avisa al activarlo.
-- Si DevTools está abierto en la pestaña, `chrome.debugger.attach` puede fallar
-  y el raffle se omite.
-- El clic trusted es por coordenadas: un overlay del sitio (modal, banner)
-  que cubra el botón lo intercepta, igual que le pasaría a un usuario real
-  con el ratón. Ciérralo y el siguiente raffle se pulsa normal.
-- El ajuste va en `chrome.storage.sync` (como el resto de la configuración de
-  módulos): si sincronizas tu cuenta en otro equipo, actívalo/apágalo allí.
 
 ### P4 — CSS fuera de `web_accessible_resources`
 
@@ -608,7 +636,7 @@ del splash del sitio explicaba la diferencia 4 vs 5 del informe anterior.
 
 ```bash
 cd /home/manager/Downloads
-zip -r andypsx-extension-v1.6.4.zip andypsx-extension-v1.0.4 \
+zip -r andypsx-extension-v2.0.0.zip andypsx-extension-v1.0.4 \
   -x '*/.git/*' '*/__pycache__/*'
 ```
 

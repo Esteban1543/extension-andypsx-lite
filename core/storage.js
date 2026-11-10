@@ -2,7 +2,12 @@ import { LEGACY_STORAGE_KEY, STORAGE_KEYS } from "./config.js";
 import { warn } from "./log.js";
 
 const MODULES_KEY = STORAGE_KEYS.modules;
+const MIGRATIONS_KEY = "migrations";
+const TRUSTED_CLICKS_DEFAULT_MIGRATION = "trustedClicksDefaultOn";
 let storageQueue = Promise.resolve();
+// La migración de trustedClicks se comprueba una vez por contexto (background,
+// content, popup); el resto de llamadas no pagan la lectura extra.
+let trustedClicksMigrationChecked = false;
 
 function withStorageLock(task) {
   const next = storageQueue.then(task, task);
@@ -94,6 +99,46 @@ async function removeLegacyKey() {
   }
 }
 
+// v2.0: trustedClicks pasa a estar activado por defecto. Se fuerza a true una
+// sola vez por perfil; si el usuario lo desmarca después, esto no vuelve a
+// correr y su elección manda.
+async function migrateTrustedClicksDefault(raw) {
+  if (trustedClicksMigrationChecked) return;
+
+  let stored;
+  try {
+    stored = await chrome.storage.sync.get(MIGRATIONS_KEY);
+  } catch (error) {
+    warn("No se pudo comprobar la migración de trustedClicks:", error);
+    return;
+  }
+
+  const migrations = isRecord(stored[MIGRATIONS_KEY]) ? stored[MIGRATIONS_KEY] : {};
+  if (migrations[TRUSTED_CLICKS_DEFAULT_MIGRATION] === true) {
+    trustedClicksMigrationChecked = true;
+    return;
+  }
+
+  try {
+    const entry = isRecord(raw.modules.raffles) ? raw.modules.raffles : {};
+    const settings = isRecord(entry.settings) ? entry.settings : {};
+
+    raw.modules = {
+      ...raw.modules,
+      raffles: { ...entry, settings: { ...settings, trustedClicks: true } },
+    };
+
+    await chrome.storage.sync.set({
+      [MODULES_KEY]: raw.modules,
+      [MIGRATIONS_KEY]: { ...migrations, [TRUSTED_CLICKS_DEFAULT_MIGRATION]: true },
+    });
+
+    trustedClicksMigrationChecked = true;
+  } catch (error) {
+    warn("No se pudo migrar trustedClicks:", error);
+  }
+}
+
 async function migrateLegacy(definitions, raw, nextStates) {
   if (typeof raw.legacyEnabled !== "boolean") return;
 
@@ -126,6 +171,7 @@ export function getModuleStates(definitions) {
 
   return withStorageLock(async () => {
     const raw = await readRaw();
+    await migrateTrustedClicksDefault(raw);
     const nextStates = normalizeStates(known, raw);
 
     await migrateLegacy(known, raw, nextStates);

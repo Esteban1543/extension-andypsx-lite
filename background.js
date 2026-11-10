@@ -98,15 +98,18 @@ async function handleTrustedClick(message, sender) {
   const url = sender.tab?.url;
 
   if (typeof tabId !== "number" || !isTargetUrl(url)) {
-    return { ok: false, error: "not-target" };
+    return { ok: false, reason: "debugger-failed", error: "not-target" };
   }
 
   const moves = sanitizeMoves(message.moves);
 
   if (!moves || !finiteNumber(message.targetX) || !finiteNumber(message.targetY)) {
-    return { ok: false, error: "invalid-click" };
+    return { ok: false, reason: "debugger-failed", error: "invalid-click" };
   }
 
+  const token = typeof message.token === "string" && message.token.length > 0
+    ? message.token
+    : null;
   const target = {
     x: Math.round(message.targetX),
     y: Math.round(message.targetY),
@@ -120,13 +123,144 @@ async function handleTrustedClick(message, sender) {
   } catch (error) {
     return {
       ok: false,
+      reason: "debugger-failed",
       error: `No se pudo adjuntar debugger: ${
         error instanceof Error ? error.message : String(error)
       }`,
     };
   }
 
+  // D4: pedir a la pestaña que confirme que el botón sigue bajo el ratón
+  // justo antes de pulsar. Sin token (llamada antigua) se pulsa directo.
+  const confirmWithTab = async (point) => {
+    try {
+      return await Promise.race([
+        chrome.tabs.sendMessage(tabId, {
+          type: "click:confirm",
+          token,
+          x: point.x,
+          y: point.y,
+        }),
+        new Promise((resolve) =>
+          setTimeout(() => resolve({ ok: false, reason: "debugger-failed" }), 1000),
+        ),
+      ]);
+    } catch {
+      return { ok: false, reason: "debugger-failed" };
+    }
+  };
+
+  // D4: confirma con la pestaña que el botón sigue bajo el ratón y devuelve
+  // el punto estable donde pulsar. moveToPoint ejecuta el movimiento hacia
+  // la posición recalculada (con o sin await según el modo de despacho).
+  const resolveStablePoint = async (startPoint, moveToPoint) => {
+    let point = { x: startPoint.x, y: startPoint.y };
+
+    for (let round = 0; round < 3; round += 1) {
+      const confirmation = await confirmWithTab(point);
+
+      if (!confirmation?.ok) {
+        const reason = confirmation?.reason;
+        return {
+          ok: false,
+          reason: reason === "gone" || reason === "covered" ? reason : "debugger-failed",
+        };
+      }
+
+      const next = {
+        x: Math.round(confirmation.x),
+        y: Math.round(confirmation.y),
+      };
+
+      if (next.x === point.x && next.y === point.y) {
+        return { ok: true, point };
+      }
+
+      point = next;
+      await moveToPoint(point);
+    }
+
+    // No se estabiliza en 3 rondas: la página no deja de moverse.
+    return { ok: false, reason: "covered" };
+  };
+
   try {
+    // Pestaña oculta: cada await de un comando de input bloquea ~5 s porque
+    // el renderer ahogado procesa los acks muy despacio. Se despachan en
+    // pipeline (orden FIFO garantizado) y se espera al final.
+    if (message.hidden === true) {
+      const pending = [];
+      const dispatch = (params) => {
+        const p = chrome.debugger.sendCommand(
+          { tabId },
+          "Input.dispatchMouseEvent",
+          params,
+        );
+        pending.push(p);
+        return p;
+      };
+
+      for (const move of moves) {
+        dispatch({
+          type: "mouseMoved",
+          x: move.x,
+          y: move.y,
+          button: "none",
+          buttons: 0,
+        });
+        await delay(move.waitMs);
+      }
+
+      await delay(hoverWaitMs);
+
+      let point = { x: target.x, y: target.y };
+
+      if (token) {
+        const stable = await resolveStablePoint(target, async (next) => {
+          dispatch({
+            type: "mouseMoved",
+            x: next.x,
+            y: next.y,
+            button: "none",
+            buttons: 0,
+          });
+          await delay(40);
+        });
+
+        if (!stable.ok) return { ok: false, reason: stable.reason };
+        point = stable.point;
+      }
+
+      dispatch({
+        type: "mousePressed",
+        x: point.x,
+        y: point.y,
+        button: "left",
+        buttons: 1,
+        clickCount: 1,
+      });
+
+      await delay(pressWaitMs);
+
+      dispatch({
+        type: "mouseReleased",
+        x: point.x,
+        y: point.y,
+        button: "left",
+        buttons: 0,
+        clickCount: 1,
+      });
+
+      await delay(releaseWaitMs);
+
+      const settled = await Promise.allSettled(pending);
+      if (settled.some((s) => s.status === "rejected")) {
+        return { ok: false, reason: "debugger-failed", error: "input dispatch failed" };
+      }
+
+      return { ok: true };
+    }
+
     for (const move of moves) {
       await chrome.debugger.sendCommand(
         { tabId },
@@ -144,13 +278,35 @@ async function handleTrustedClick(message, sender) {
 
     await delay(hoverWaitMs);
 
+    let point = { x: target.x, y: target.y };
+
+    if (token) {
+      const stable = await resolveStablePoint(target, async (next) => {
+        await chrome.debugger.sendCommand(
+          { tabId },
+          "Input.dispatchMouseEvent",
+          {
+            type: "mouseMoved",
+            x: next.x,
+            y: next.y,
+            button: "none",
+            buttons: 0,
+          },
+        );
+        await delay(40);
+      });
+
+      if (!stable.ok) return { ok: false, reason: stable.reason };
+      point = stable.point;
+    }
+
     await chrome.debugger.sendCommand(
       { tabId },
       "Input.dispatchMouseEvent",
       {
         type: "mousePressed",
-        x: target.x,
-        y: target.y,
+        x: point.x,
+        y: point.y,
         button: "left",
         buttons: 1,
         clickCount: 1,
@@ -164,8 +320,8 @@ async function handleTrustedClick(message, sender) {
       "Input.dispatchMouseEvent",
       {
         type: "mouseReleased",
-        x: target.x,
-        y: target.y,
+        x: point.x,
+        y: point.y,
         button: "left",
         buttons: 0,
         clickCount: 1,
@@ -177,6 +333,7 @@ async function handleTrustedClick(message, sender) {
   } catch (error) {
     return {
       ok: false,
+      reason: "debugger-failed",
       error: `No se pudo hacer el clic: ${
         error instanceof Error ? error.message : String(error)
       }`,

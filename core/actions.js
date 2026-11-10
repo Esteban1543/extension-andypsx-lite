@@ -194,28 +194,137 @@ export async function humanClick(element, { shouldStop = () => false } = {}) {
   return true;
 }
 
+// Resultado de trustedHumanClick:
+//   ok              el botón recibió un click isTrusted
+//   debugger-failed el depurador no pudo conectar, ejecutar o confirmar
+//   missed          el background dijo "hecho" pero el botón no recibió el clic
+//   covered         algo tapa el botón justo antes de pulsar
+//   gone            el botón desapareció, se deshabilitó o dejó de medir
+//   stopped         el módulo se detuvo a mitad del clic
 export async function trustedHumanClick(element, { shouldStop = () => false } = {}) {
   const plan = await prepareClick(element, shouldStop);
-  if (!plan || shouldStop()) return false;
+  if (!plan) return { ok: false, reason: "gone" };
+  if (shouldStop()) return { ok: false, reason: "stopped" };
 
-  // Contexto invalidado: no hay quién ejecute el clic trusted; se omite.
-  if (!backgroundAvailable()) return false;
-
-  let response;
-
-  try {
-    response = await chrome.runtime.sendMessage({
-      type: "trusted-click",
-      targetX: plan.targetX,
-      targetY: plan.targetY,
-      moves: plan.moves,
-      hoverWaitMs: plan.hoverWaitMs,
-      pressWaitMs: plan.pressWaitMs,
-      releaseWaitMs: plan.releaseWaitMs,
-    });
-  } catch {
-    return false;
+  if (!element.isConnected || isButtonDisabled(element)) {
+    return { ok: false, reason: "gone" };
   }
 
-  return response?.ok === true;
+  // Contexto invalidado: no hay quién ejecute el clic confiable.
+  if (!backgroundAvailable()) {
+    return { ok: false, reason: "debugger-failed" };
+  }
+
+  const token = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+
+  // En una pestaña oculta, cada await de un comando de input bloquea ~5 s
+  // (el renderer procesa el ack a ritmo ahogado). El background los despacha
+  // en pipeline y la verificación de impacto (D3) usa una ventana mayor.
+  const hidden = document.hidden === true;
+
+  // D4: el background pregunta por este token justo antes de pulsar. Se
+  // re-mide el botón y se comprueba qué hay exactamente bajo el ratón. Si el
+  // punto actual sigue sobre el botón se devuelve igual (posición estable).
+  const confirmListener = (message, sender, sendResponse) => {
+    if (message?.type !== "click:confirm" || message.token !== token) return false;
+
+    if (!element.isConnected || isButtonDisabled(element)) {
+      sendResponse({ ok: false, reason: "gone" });
+      return false;
+    }
+
+    const rect = element.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) {
+      sendResponse({ ok: false, reason: "gone" });
+      return false;
+    }
+
+    let x = Number(message.x);
+    let y = Number(message.y);
+    const inside =
+      Number.isFinite(x) &&
+      Number.isFinite(y) &&
+      x >= rect.left &&
+      x <= rect.right &&
+      y >= rect.top &&
+      y <= rect.bottom;
+
+    if (!inside) {
+      x = Math.round(rect.left + rect.width * randomBetween(0.3, 0.7));
+      y = Math.round(rect.top + rect.height * randomBetween(0.3, 0.7));
+    }
+
+    const hit = document.elementFromPoint(x, y);
+    if (!hit || (hit !== element && !element.contains(hit))) {
+      sendResponse({ ok: false, reason: "covered" });
+      return false;
+    }
+
+    sendResponse({ ok: true, x: Math.round(x), y: Math.round(y) });
+    return false;
+  };
+
+  // D3: escuchar el click confiable real sobre el botón. Listener en document
+  // en fase de captura (el punto más temprano de la propagación): ni un
+  // stopPropagation de la página por encima del botón puede ocultarlo. Mundo
+  // aislado: la página no puede ver este listener.
+  let trustedClickArrived = false;
+  let resolveClickSeen;
+  const clickSeen = new Promise((resolve) => {
+    resolveClickSeen = resolve;
+  });
+  const clickListener = (event) => {
+    if (!event.isTrusted) return;
+    if (event.target !== element && !element.contains(event.target)) return;
+
+    trustedClickArrived = true;
+    resolveClickSeen();
+  };
+
+  document.addEventListener("click", clickListener, true);
+  chrome.runtime.onMessage.addListener(confirmListener);
+
+  try {
+    let response;
+    try {
+      response = await chrome.runtime.sendMessage({
+        type: "trusted-click",
+        token,
+        hidden,
+        targetX: plan.targetX,
+        targetY: plan.targetY,
+        moves: plan.moves,
+        hoverWaitMs: plan.hoverWaitMs,
+        pressWaitMs: plan.pressWaitMs,
+        releaseWaitMs: plan.releaseWaitMs,
+      });
+    } catch {
+      return { ok: false, reason: "debugger-failed" };
+    } finally {
+      chrome.runtime.onMessage.removeListener(confirmListener);
+    }
+
+    if (shouldStop()) return { ok: false, reason: "stopped" };
+
+    if (!response?.ok) {
+      const reason = response?.reason;
+      return {
+        ok: false,
+        reason: reason === "covered" || reason === "gone" ? reason : "debugger-failed",
+      };
+    }
+
+    // D3: el background dice que pulsó; el botón debe haberlo recibido. En
+    // pestaña oculta el clic puede llegar segundos más tarde (el renderer
+    // procesa el input en su próxima ventana de activación), así que la
+    // ventana de verificación es mayor y va por alarma del background.
+    const verify = hidden ? waitForRaffleDelay(12000) : shortWait(1500);
+    await Promise.race([clickSeen, verify]);
+
+    if (shouldStop()) return { ok: false, reason: "stopped" };
+    if (trustedClickArrived) return { ok: true, reason: "ok" };
+    return { ok: false, reason: "missed" };
+  } finally {
+    document.removeEventListener("click", clickListener, true);
+  }
 }

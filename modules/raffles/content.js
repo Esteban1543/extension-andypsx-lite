@@ -216,33 +216,77 @@ export function init(ctx) {
     const settings = await ctx.getSettings();
     const trustedClicks = settings?.trustedClicks === true;
 
-    const clicked = trustedClicks
-      ? await trustedHumanClick(button, {
-          shouldStop: () => moduleState.stopped,
-        })
-      : await humanClick(button, {
+    let clicked = false;
+    let usedTrusted = trustedClicks;
+    let fallbackReason = null;
+
+    if (!trustedClicks) {
+      clicked = await humanClick(button, {
+        shouldStop: () => moduleState.stopped,
+      });
+    } else {
+      const result = await trustedHumanClick(button, {
+        shouldStop: () => moduleState.stopped,
+      });
+
+      if (result.ok) {
+        clicked = true;
+      } else if (moduleState.stopped || result.reason === "stopped") {
+        return false;
+      } else if (result.reason === "gone") {
+        if (!button.isConnected) {
+          markSkipped(section, "no-button");
+          ctx.log("Raffle omitido, botón retirado durante el clic:", title);
+        } else {
+          markSkipped(section, "button-disabled");
+          ctx.log("Raffle omitido, botón deshabilitado durante el clic:", title);
+        }
+        return false;
+      } else if (result.reason === "missed" && looksAlreadyParticipating(section)) {
+        // El clic confiable llegó pero el listener no lo vio: el sitio ya
+        // registra participación, no se pulsa otra vez.
+        clicked = true;
+      } else if (
+        button.isConnected &&
+        !isButtonDisabled(button) &&
+        !looksAlreadyParticipating(section)
+      ) {
+        // D2/D3: respaldo con clic sintético para no perder el raffle.
+        const synthetic = await humanClick(button, {
           shouldStop: () => moduleState.stopped,
         });
 
-    if (!clicked || moduleState.stopped) {
-      if (!moduleState.stopped) {
-        markSkipped(section, "not-clickable");
-        if (trustedClicks) {
-          ctx.log("Clic confiable falló:", title);
+        if (synthetic) {
+          clicked = true;
+          usedTrusted = false;
+          fallbackReason = result.reason;
         }
       }
-      return false;
+
+      if (!clicked) {
+        markSkipped(section, "not-clickable");
+        ctx.log(`Clic confiable falló (${result.reason}):`, title);
+        return false;
+      }
     }
+
+    if (moduleState.stopped) return false;
 
     moduleState.batchHasClick = true;
     record.clicked = true;
     ctx.log("Clic en Participar:", title);
+
+    if (fallbackReason) {
+      ctx.log(`Clic confiable no disponible (${fallbackReason}); clic normal usado:`, title);
+    }
+
     ctx.bus.emit("raffles:clicked", {
       id: record.id,
       title,
       at: Date.now(),
       delayMs: Math.round(delayMs),
-      trusted: trustedClicks,
+      trusted: usedTrusted,
+      ...(fallbackReason ? { fallback: fallbackReason } : {}),
     });
 
     return true;
