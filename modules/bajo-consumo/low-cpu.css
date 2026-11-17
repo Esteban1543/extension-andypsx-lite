@@ -1,0 +1,26 @@
+/* ─── BAJO CONSUMO ──────────────────────────────────────────────────────────
+   La web de /live define 100+ @keyframes, muchos infinitos, y varios animan
+   text-shadow, box-shadow o background-position: se repintan en el HILO
+   PRINCIPAL a ritmo de fotograma. Con muchos perfiles abiertos, cada uno
+   repinta sin parar y la CPU se satura.
+
+   Corte por duración casi cero, NO animation:none:
+   - Los elementos con entrada `forwards` (p. ej. .psx-aparece, que nace con
+     opacity:0) saltan a su estado final y quedan visibles.
+   - animationend/transitionend se siguen disparando: la lógica de la web
+     que espera esos eventos no se rompe.
+   - Iteración 1: los bucles infinitos (marquesinas, halos, llamas) se
+     ejecutan exactamente una vez, en menos de un milisegundo.
+
+   Desactivable desde el popup como cualquier módulo.
+   ---------------------------------------------------------------------------- */
+
+*,
+*::before,
+*::after {
+  animation-duration: 0.01ms !important;
+  animation-delay: 0s !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  transition-delay: 0s !important;
+}
