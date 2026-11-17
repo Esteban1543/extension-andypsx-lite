@@ -24,6 +24,10 @@ const MAX_CLICK_MOVES = 12;
 const MAX_CLICK_DELAY_MS = 1000;
 const MAX_RAFFLE_WAIT_MS = 60000;
 const MAX_SHORT_WAIT_MS = 2000;
+// Presupuesto total del clic confiable: si la pestaña no procesa los comandos
+// del debugger a este ritmo, se aborta y el content cae al clic sintético.
+// Sin él, un await atascado dejaba el debugger adjuntado para siempre.
+const CLICK_BUDGET_MS = 30000;
 let ready = Promise.resolve();
 
 function logError(message, detail) {
@@ -129,6 +133,23 @@ async function handleTrustedClick(message, sender) {
       }`,
     };
   }
+
+  // Presupuesto: al vencer aborta el clic completo (el finally desadjunta el
+  // debugger) y el content reintenta con clic sintético si el botón sigue.
+  const deadline = Date.now() + CLICK_BUDGET_MS;
+
+  const withBudget = (promise) => {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return Promise.reject(new Error("click-budget"));
+
+    let timer;
+    return Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("click-budget")), remaining);
+      }),
+    ]).finally(() => clearTimeout(timer));
+  };
 
   // D4: pedir a la pestaña que confirme que el botón sigue bajo el ratón
   // justo antes de pulsar. Sin token (llamada antigua) se pulsa directo.
@@ -253,7 +274,7 @@ async function handleTrustedClick(message, sender) {
 
       await delay(releaseWaitMs);
 
-      const settled = await Promise.allSettled(pending);
+      const settled = await withBudget(Promise.allSettled(pending));
       if (settled.some((s) => s.status === "rejected")) {
         return { ok: false, reason: "debugger-failed", error: "input dispatch failed" };
       }
@@ -262,16 +283,18 @@ async function handleTrustedClick(message, sender) {
     }
 
     for (const move of moves) {
-      await chrome.debugger.sendCommand(
-        { tabId },
-        "Input.dispatchMouseEvent",
-        {
-          type: "mouseMoved",
-          x: move.x,
-          y: move.y,
-          button: "none",
-          buttons: 0,
-        },
+      await withBudget(
+        chrome.debugger.sendCommand(
+          { tabId },
+          "Input.dispatchMouseEvent",
+          {
+            type: "mouseMoved",
+            x: move.x,
+            y: move.y,
+            button: "none",
+            buttons: 0,
+          },
+        ),
       );
       await delay(move.waitMs);
     }
@@ -282,16 +305,18 @@ async function handleTrustedClick(message, sender) {
 
     if (token) {
       const stable = await resolveStablePoint(target, async (next) => {
-        await chrome.debugger.sendCommand(
-          { tabId },
-          "Input.dispatchMouseEvent",
-          {
-            type: "mouseMoved",
-            x: next.x,
-            y: next.y,
-            button: "none",
-            buttons: 0,
-          },
+        await withBudget(
+          chrome.debugger.sendCommand(
+            { tabId },
+            "Input.dispatchMouseEvent",
+            {
+              type: "mouseMoved",
+              x: next.x,
+              y: next.y,
+              button: "none",
+              buttons: 0,
+            },
+          ),
         );
         await delay(40);
       });
@@ -300,43 +325,58 @@ async function handleTrustedClick(message, sender) {
       point = stable.point;
     }
 
-    await chrome.debugger.sendCommand(
-      { tabId },
-      "Input.dispatchMouseEvent",
-      {
-        type: "mousePressed",
-        x: point.x,
-        y: point.y,
-        button: "left",
-        buttons: 1,
-        clickCount: 1,
-      },
+    await withBudget(
+      chrome.debugger.sendCommand(
+        { tabId },
+        "Input.dispatchMouseEvent",
+        {
+          type: "mousePressed",
+          x: point.x,
+          y: point.y,
+          button: "left",
+          buttons: 1,
+          clickCount: 1,
+        },
+      ),
     );
 
     await delay(pressWaitMs);
 
-    await chrome.debugger.sendCommand(
-      { tabId },
-      "Input.dispatchMouseEvent",
-      {
-        type: "mouseReleased",
-        x: point.x,
-        y: point.y,
-        button: "left",
-        buttons: 0,
-        clickCount: 1,
-      },
+    await withBudget(
+      chrome.debugger.sendCommand(
+        { tabId },
+        "Input.dispatchMouseEvent",
+        {
+          type: "mouseReleased",
+          x: point.x,
+          y: point.y,
+          button: "left",
+          buttons: 0,
+          clickCount: 1,
+        },
+      ),
     );
 
     await delay(releaseWaitMs);
     return { ok: true };
   } catch (error) {
+    const errorText = error instanceof Error ? error.message : String(error);
+
+    // Presupuesto agotado: la pestaña no procesó los comandos a tiempo. Se
+    // reporta como "timeout" y el content cae al clic sintético si el botón
+    // sigue clicable; el debugger ya quedó desadjuntado en el finally.
+    if (errorText === "click-budget") {
+      return {
+        ok: false,
+        reason: "timeout",
+        error: `El clic confiable agotó su presupuesto de ${CLICK_BUDGET_MS} ms.`,
+      };
+    }
+
     return {
       ok: false,
       reason: "debugger-failed",
-      error: `No se pudo hacer el clic: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      error: `No se pudo hacer el clic: ${errorText}`,
     };
   } finally {
     await chrome.debugger.detach({ tabId }).catch(() => {});

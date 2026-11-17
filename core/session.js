@@ -336,12 +336,10 @@ export function startSessionWatcher({ onChange, shouldCheck = () => true } = {})
     }, SESSION_DEBOUNCE_MS);
   }
 
-  const observer = new MutationObserver(scheduleCheck);
-  const root = document.body ?? document.documentElement;
-  if (root) {
-    observer.observe(root, { childList: true, subtree: true });
-  }
-
+  // Sin MutationObserver sobre el body: la página muta sin parar (chat,
+  // contadores) y cada mutación reiniciaba el debounce. El interval de
+  // SESSION_CHECK_INTERVAL_MS, pageshow y visibilitychange cubren la
+  // detección de login/logout con una fracción del coste.
   const interval = window.setInterval(() => {
     void check();
   }, SESSION_CHECK_INTERVAL_MS);
@@ -372,7 +370,6 @@ export function startSessionWatcher({ onChange, shouldCheck = () => true } = {})
     check,
     destroy() {
       stopped = true;
-      observer.disconnect();
       window.clearInterval(interval);
       window.clearTimeout(debounceTimer);
       window.removeEventListener("pageshow", scheduleCheck);

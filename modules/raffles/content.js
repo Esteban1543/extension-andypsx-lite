@@ -2,13 +2,18 @@ import {
   humanClick,
   isButtonDisabled,
   randomBetween,
-  shortWait,
   trustedHumanClick,
   waitForRaffleDelay,
 } from "../../core/actions.js";
 
 const RAFFLE_SELECTOR = 'section[aria-label^="Raffle:"]';
 const SCAN_DELAY_MS = 150;
+// Techo de frecuencia: pase lo que pase en la página, nunca dos escaneos
+// seguidos en menos de este intervalo. Los raffles ya procesados mutan sin
+// parar (contadores, "Sorteando", listas, animaciones) y reaccionar a cada
+// cambio mantenía la CPU al 100%.
+const SCAN_MIN_INTERVAL_MS = 1000;
+const SCAN_REPORT_MS = 60000;
 const FIRST_CLICK_DELAY_MS = { min: 5000, max: 10000 };
 const NEXT_CLICK_DELAY_MS = { min: 2000, max: 5000 };
 
@@ -140,7 +145,10 @@ export function init(ctx) {
   const moduleState = {
     observer: null,
     scanTimer: null,
-    hiddenScanPending: false,
+    nextScanAt: null,
+    lastScanAt: 0,
+    scanCount: 0,
+    scanReportAt: 0,
     scanListener: null,
     tracked: new Map(),
     records: new WeakMap(),
@@ -351,12 +359,32 @@ export function init(ctx) {
   }
 
   function scan() {
+    const now = Date.now();
+    moduleState.lastScanAt = now;
+    moduleState.scanCount += 1;
+
+    if (now - moduleState.scanReportAt >= SCAN_REPORT_MS) {
+      if (moduleState.scanReportAt > 0) {
+        ctx.log(`Escaneos en el último minuto: ${moduleState.scanCount}.`);
+      }
+      moduleState.scanCount = 0;
+      moduleState.scanReportAt = now;
+    }
+
     const sections = [...document.querySelectorAll(RAFFLE_SELECTOR)];
     const currentSections = new Map();
 
     for (const section of sections) {
       const record = recordFor(section);
-      const snapshot = readRaffle(section, record.id);
+      const known = moduleState.tracked.get(section);
+
+      // Raffle ya procesado: se reutiliza el snapshot anterior. Sus cambios
+      // internos (contadores, listas, animaciones) no vuelven a leer el DOM,
+      // que era la parte cara de cada escaneo.
+      const snapshot =
+        known && moduleState.processed.has(section)
+          ? known
+          : readRaffle(section, record.id);
       currentSections.set(section, snapshot);
     }
 
@@ -404,27 +432,37 @@ export function init(ctx) {
   }
 
   function scheduleScan() {
-    // Oculta: el setTimeout de la pestaña puede tardar hasta ~1 min en
-    // dispararse. Se agrupan las mutaciones con una espera del background.
-    if (document.hidden) {
-      if (moduleState.hiddenScanPending) return;
-      moduleState.hiddenScanPending = true;
+    if (moduleState.stopped) return;
 
-      void shortWait(SCAN_DELAY_MS).then(() => {
-        moduleState.hiddenScanPending = false;
-        if (!moduleState.stopped) scan();
-      });
+    // Se agrupan las mutaciones (SCAN_DELAY_MS) y además se impone un mínimo
+    // entre escaneos: una ráfaga de cambios no puede disparar escaneo tras
+    // escaneo. Con la pestaña oculta Chrome agrupa los timers en 1/s, que ya
+    // encaja con este techo; el latido "scan" del background cubre los huecos.
+    const now = Date.now();
+    const at = Math.max(
+      now + SCAN_DELAY_MS,
+      moduleState.lastScanAt + SCAN_MIN_INTERVAL_MS,
+    );
+
+    if (
+      moduleState.scanTimer !== null &&
+      moduleState.nextScanAt !== null &&
+      moduleState.nextScanAt <= at
+    ) {
       return;
     }
 
     window.clearTimeout(moduleState.scanTimer);
-    moduleState.scanTimer = window.setTimeout(scan, SCAN_DELAY_MS);
+    moduleState.nextScanAt = at;
+    moduleState.scanTimer = window.setTimeout(() => {
+      moduleState.scanTimer = null;
+      moduleState.nextScanAt = null;
+      if (!moduleState.stopped) scan();
+    }, at - now);
   }
 
   function handleMutations(mutations) {
     const relevant = mutations.some((mutation) => {
-      if (mutation.target?.closest?.(RAFFLE_SELECTOR)) return true;
-
       for (const node of mutation.addedNodes) {
         if (isRaffleRelated(node)) return true;
       }
@@ -432,7 +470,12 @@ export function init(ctx) {
         if (isRaffleRelated(node)) return true;
       }
 
-      return false;
+      // Cambios DENTRO de una tarjeta: solo importan en raffles aún no
+      // procesados, donde el botón puede aparecer o habilitarse. En los ya
+      // procesados (clic hecho u omitido definitivo) el contenido cambia sin
+      // parar y reaccionar era la principal fuente de CPU.
+      const section = mutation.target?.closest?.(RAFFLE_SELECTOR);
+      return Boolean(section) && !moduleState.processed.has(section);
     });
 
     if (relevant) scheduleScan();

@@ -169,7 +169,22 @@ chrome.storage.local.set({ debug: true });
 [raffles] Raffle omitido, requiere contraseña: SOLO ANDY SORTEO 10$ CASH...
 [raffles] Esperando 7.3s antes de participar: Raffle 5 × $5
 [raffles] Clic en Participar: Raffle 5 × $5
+[raffles] Escaneos en el último minuto: 4.
 ```
+
+## Coste del escaneo
+
+Los raffles ya procesados mutan sin parar (contador "Cierre en", estado
+"Sorteando", listas de ganadores, animaciones). Por eso:
+
+- El `MutationObserver` ignora los cambios dentro de raffles ya procesados.
+  Solo reacciona a raffles que aparecen o desaparecen y a cambios en raffles
+  pendientes (donde el botón aún puede aparecer o habilitarse).
+- Nunca hay dos escaneos en menos de 1 s (`SCAN_MIN_INTERVAL_MS`).
+- Los raffles procesados se releen con el snapshot anterior; no se vuelve a
+  leer su DOM.
+- El log `Escaneos en el último minuto` permite comprobar la frecuencia real
+  con el flag `debug`.
 
 ## Prueba local
 
