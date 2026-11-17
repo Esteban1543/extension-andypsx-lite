@@ -60,13 +60,16 @@ está muerto, el CSS no se aplica y no queda rastro en la página.
 ## Bloques del CSS
 
 1. **Ocultar**: cabecera, título, pie, directo, Bonus Hunt, Soporte,
-   "Tu directo", promo de extensión y columnas sobrantes del grid.
+   "Tu directo", promo de extensión, columnas sobrantes del grid y los
+   botones flotantes de chat y de la extensión oficial.
 2. **Orden**: RAFLES (1), CAJAS (2), APUESTAS (3), GUESSES (4).
 3. **Liberar la barra lateral**: el grid principal deja de reservar 272 px.
-4. **Rejilla de 5 columnas** en `≥1200px`. Raffles apilados; Cajas ocupa dos
-   columnas; Apuestas y Guess tienen columna propia. Los huecos vacíos se
-   dibujan con `::before` / `::after`.
-5. **Cajas**: botones VIEWER / SUBS en dos columnas; lista de ganadores flotante
+4. **Rejilla de 5 columnas** en `≥1200px`, montada con grid: raffles en la
+   columna 1 y guesses en la 5, apilados en listado aunque haya muchas
+   tarjetas; Cajas ocupa las columnas 2-3 y Apuestas la 4, en absolute sobre
+   su área del grid para no estirar las filas. Los huecos vacíos se dibujan
+   con `::before` / `::after` como items del grid.
+5. **Cajas**: pestañas SUBS / VIP en dos columnas; lista de ganadores flotante
    con scroll fino y orden inverso.
 6. **Pantallas medianas** `641–1199px`: dos tarjetas por fila.
 7. **Móvil** `≤640px`: una tarjeta por fila.
@@ -87,15 +90,17 @@ De más fuerte a más débil:
 Los `aria-label` cambian cada día:
 
 ```text
-"Guess: 23 BONOS CUANTO SACAMOS"
+"Guess SUBS: 23 BONOS CUANTO SACAMOS"
+"Guess VIP: 23 BONOS CUANTO SACAMOS"
 "Apuesta: 23 BONOS CUANTO SACAMOS"
 "Raffle: Raffle 5 × $5"
 ```
 
-Por eso se usan prefijos (`^=`):
+La web eliminó los dos puntos tras "Guess" (antes era `Guess: 23 BONOS`), por
+eso ese prefijo se ancla solo en la palabra:
 
 ```css
-section[aria-label^="Guess:"]
+section[aria-label^="Guess"]
 section[aria-label^="Apuesta:"]
 section[aria-label^="Raffle:"]
 ```

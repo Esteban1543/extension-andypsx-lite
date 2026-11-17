@@ -13,13 +13,17 @@
    Cada regla frágil tiene un fallback alternativo.
    ============================================================================ */
 
-/* ─── 1. OCULTAR: cabecera, título, pie, directo, hunt, soporte, "Tu directo" */
+/* ─── 1. OCULTAR: cabecera, título, pie, directo, hunt, soporte, "Tu directo",
+        botones flotantes de chat y de la extensión oficial */
 
 /* Cabecera del sitio (fuerte: data attribute) */
 header[data-cabecera-sitio],
 
-/* Contenedor sticky de la cabecera (fuerte: :has + data attribute) */
-:has(> header[data-cabecera-sitio]),
+/* Contenedor sticky de la cabecera (fuerte: :has + data attribute).
+   Anclado a div: sin elemento inicial, :has() obligaba a recalcular estilos
+   ante cualquier cambio de la página. El contenedor sticky del sitio es un
+   div (verificado contra el HTML servido). */
+div:has(> header[data-cabecera-sitio]),
 
 /* Primer hijo directo de main (frágil: fallback con :has de footer) */
 main > div:first-child,
@@ -45,15 +49,22 @@ div[class*="lg:grid-cols-[minmax(0,1fr)_272px]"] > :not(aside):nth-child(1),
 /* Columna derecha / tercer elemento (frágil: clase Tailwind)
    FALLBACK: :has con footer o contenido no-relacionado */
 div[class*="lg:grid-cols-[minmax(0,1fr)_272px]"] > div:nth-child(3),
-div[class*="lg:grid-cols-[minmax(0,1fr)_272px]"] > :has(> footer) {
+div[class*="lg:grid-cols-[minmax(0,1fr)_272px]"] > div:has(> footer),
+
+/* Botón flotante del chat (fuerte: data attribute del sitio) */
+div[data-boton-chat="true"],
+
+/* Botón flotante de la extensión oficial (fuerte: aria-label) */
+button[aria-label="Abrir el aviso de la extensión oficial"] {
   display: none !important;
 }
 
 /* ─── 2. ORDEN de los paneles (1 RAFLES · 2 CAJAS · 3 APUESTAS · 4 GUESSES) */
 
-/* Todos usan aria-label — muy estables */
-aside[aria-label="Participa en el directo"] > section[aria-label^="Raffle:"],
-aside[aria-label="Participa en el directo"] > section[aria-label^="Free spins"] {
+/* Todos usan aria-label — muy estables.
+   La web cambió "Guess: X" a "Guess SUBS: X" / "Guess VIP: X": el prefijo
+   ya no lleva dos puntos, por eso se ancla solo en "Guess". */
+aside[aria-label="Participa en el directo"] > section[aria-label^="Raffle:"] {
   order: 1 !important;
 }
 aside[aria-label="Participa en el directo"] > section#cajas-en-directo {
@@ -62,7 +73,7 @@ aside[aria-label="Participa en el directo"] > section#cajas-en-directo {
 aside[aria-label="Participa en el directo"] > section[aria-label^="Apuesta:"] {
   order: 3 !important;
 }
-aside[aria-label="Participa en el directo"] > section[aria-label^="Guess:"] {
+aside[aria-label="Participa en el directo"] > section[aria-label^="Guess"] {
   order: 4 !important;
 }
 
@@ -72,19 +83,19 @@ aside[aria-label="Participa en el directo"] > section[aria-label^="Guess:"] {
    FALLBACK: padre directo del aside de participación */
 @media (min-width: 1024px) {
   div[class*="lg:grid-cols-[minmax(0,1fr)_272px]"],
-  :has(> aside[aria-label="Participa en el directo"]) {
+  div:has(> aside[aria-label="Participa en el directo"]) {
     grid-template-columns: minmax(0, 1fr) !important;
     grid-template-rows: auto !important;
   }
 
   div[class*="lg:grid-cols-[minmax(0,1fr)_272px]"] > aside,
-  :has(> aside[aria-label="Participa en el directo"]) > aside[aria-label="Participa en el directo"] {
+  div:has(> aside[aria-label="Participa en el directo"]) > aside[aria-label="Participa en el directo"] {
     grid-column: 1 !important;
     grid-row: 1 !important;
   }
 
   div[class*="lg:grid-cols-[minmax(0,1fr)_272px]"] > div:nth-child(3),
-  :has(> aside[aria-label="Participa en el directo"]) > :has(> footer) {
+  div:has(> aside[aria-label="Participa en el directo"]) > div:has(> footer) {
     grid-column: 1 !important;
   }
 
@@ -93,14 +104,21 @@ aside[aria-label="Participa en el directo"] > section[aria-label^="Guess:"] {
   }
 }
 
-/* ─── 4. REJILLA DE 5 COLUMNAS FIJAS (≥1200px) ───────────────────────────── */
+/* ─── 4. REJILLA DE 5 COLUMNAS (≥1200px) ──────────────────────────────────
+   Grid nativo en lugar de absolute: raffles y guesses se apilan en su
+   columna (modo listado) aunque haya muchas tarjetas. CAJAS y APUESTAS
+   siguen en absolute, pero su ancho sale de las líneas del grid: al no
+   ocupar filas no dejan huecos en el listado.
+   ------------------------------------------------------------------------ */
 
 @media (min-width: 1200px) {
   aside[aria-label="Participa en el directo"] {
-    display: block !important;
+    display: grid !important;
     position: relative !important;
-    --gap: 14px;
-    --col: calc((100% - 4 * var(--gap)) / 5);
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+    grid-auto-flow: row dense !important;
+    align-items: start !important;
+    gap: 14px !important;
     max-width: none !important;
     width: 100% !important;
     margin-inline: 0 !important;
@@ -111,49 +129,40 @@ aside[aria-label="Participa en el directo"] > section[aria-label^="Guess:"] {
     padding-inline: 24px !important;
   }
 
-  /* ── RAFFLES: apilados, con separación fija, todos visibles ─────────── */
-  aside[aria-label="Participa en el directo"] > section[aria-label^="Raffle:"],
-  aside[aria-label="Participa en el directo"] > section[aria-label^="Free spins"] {
-    width: var(--col) !important;
-    margin-bottom: var(--gap) !important;
-    align-self: auto !important;
-  }
-  aside[aria-label="Participa en el directo"]
-    > section[aria-label^="Raffle:"]:last-of-type,
-  aside[aria-label="Participa en el directo"]
-    > section[aria-label^="Free spins"]:last-of-type {
-    margin-bottom: 0 !important;
+  /* ── RAFFLES: columna 1, listado vertical ──────────────────────────── */
+  aside[aria-label="Participa en el directo"] > section[aria-label^="Raffle:"] {
+    grid-column: 1 / 2 !important;
   }
 
-  /* ── CAJAS (columna 2+3) — fuerte: id ───────────────────────────────── */
+  /* ── CAJAS (columnas 2+3) — fuerte: id ─────────────────────────────────
+     absolute sobre su área del grid. Líneas explícitas de inicio y fin:
+     en un hijo absolute, "grid-column: 2" solo equivale a "2 / auto" y
+     auto estira hasta el borde del contenedor, pisando a los vecinos. */
   aside[aria-label="Participa en el directo"] > section#cajas-en-directo {
+    grid-column: 2 / 4 !important;
+    grid-row: 1 / 2 !important;
     position: absolute !important;
-    top: 0 !important;
-    left: calc(var(--col) + var(--gap)) !important;
-    width: calc(2 * var(--col) + var(--gap)) !important;
+    inset: 0 0 auto 0 !important;
   }
 
   /* ── APUESTAS (columna 4) — fuerte: aria-label prefix ───────────────── */
   aside[aria-label="Participa en el directo"] > section[aria-label^="Apuesta:"] {
+    grid-column: 4 / 5 !important;
+    grid-row: 1 / 2 !important;
     position: absolute !important;
-    top: 0 !important;
-    left: calc(3 * var(--col) + 3 * var(--gap)) !important;
-    width: var(--col) !important;
+    inset: 0 0 auto 0 !important;
   }
 
-  /* ── GUESS (columna 5) — fuerte: aria-label prefix ──────────────────── */
-  aside[aria-label="Participa en el directo"] > section[aria-label^="Guess:"] {
-    position: absolute !important;
-    top: 0 !important;
-    left: calc(4 * var(--col) + 4 * var(--gap)) !important;
-    width: var(--col) !important;
+  /* ── GUESSES (columna 5) — fuerte: aria-label prefix ──────────────────
+     La web cambió "Guess: X" a "Guess SUBS: X" / "Guess VIP: X" y puede
+     haber varias tarjetas: misma columna, filas automáticas. */
+  aside[aria-label="Participa en el directo"] > section[aria-label^="Guess"] {
+    grid-column: 5 / 6 !important;
   }
 
   /* ── HUECOS RESERVADOS (si falta raffle o guess) ────────────────────── */
   aside[aria-label="Participa en el directo"]::before,
   aside[aria-label="Participa en el directo"]::after {
-    position: absolute !important;
-    top: 0 !important;
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
@@ -168,18 +177,18 @@ aside[aria-label="Participa en el directo"] > section[aria-label^="Guess:"] {
 
   aside[aria-label="Participa en el directo"]:not(:has(section[aria-label^="Raffle:"]))::before {
     content: "RAFLES" !important;
-    left: 0 !important;
-    width: var(--col) !important;
+    grid-column: 1 / 2 !important;
+    grid-row: 1 / 2 !important;
   }
 
-  aside[aria-label="Participa en el directo"]:not(:has(section[aria-label^="Guess:"]))::after {
+  aside[aria-label="Participa en el directo"]:not(:has(section[aria-label^="Guess"]))::after {
     content: "GUESSES" !important;
-    left: calc(4 * var(--col) + 4 * var(--gap)) !important;
-    width: var(--col) !important;
+    grid-column: 5 / 6 !important;
+    grid-row: 1 / 2 !important;
   }
 }
 
-/* ─── 5. CAJAS: VIEWER (No Subs) a la izquierda · SUBS a la derecha ───────── */
+/* ─── 5. CAJAS: pestañas SUBS / VIP del sitio ──────────────────────────── */
 
 /* Fuerte: id + role */
 section#cajas-en-directo > div[role="group"] {
@@ -359,7 +368,7 @@ section#cajas-en-directo > div:not([role="group"]):has(> button) > div:last-chil
     order: 1 !important;
   }
 
-  aside[aria-label="Participa en el directo"]:not(:has(section[aria-label^="Guess:"]))::after {
+  aside[aria-label="Participa en el directo"]:not(:has(section[aria-label^="Guess"]))::after {
     content: "GUESSES" !important;
     order: 4 !important;
   }
@@ -379,7 +388,7 @@ section#cajas-en-directo > div:not([role="group"]):has(> button) > div:last-chil
 }
 
 /* ─── 8. SIN DIRECTO: solo hay la tarjeta de aviso → centrada, sin rejilla ── */
-aside[aria-label="Participa en el directo"]:not(:has(section[aria-label^="Raffle:"])):not(:has(section#cajas-en-directo)):not(:has(section[aria-label^="Apuesta:"])):not(:has(section[aria-label^="Guess:"])) {
+aside[aria-label="Participa en el directo"]:not(:has(section[aria-label^="Raffle:"])):not(:has(section#cajas-en-directo)):not(:has(section[aria-label^="Apuesta:"])):not(:has(section[aria-label^="Guess"])) {
   display: flex !important;
   flex-flow: row wrap !important;
   justify-content: center !important;
@@ -389,14 +398,14 @@ aside[aria-label="Participa en el directo"]:not(:has(section[aria-label^="Raffle
   margin-inline: auto !important;
 }
 
-aside[aria-label="Participa en el directo"]:not(:has(section[aria-label^="Raffle:"])):not(:has(section#cajas-en-directo)):not(:has(section[aria-label^="Apuesta:"])):not(:has(section[aria-label^="Guess:"])) > section,
-aside[aria-label="Participa en el directo"]:not(:has(section[aria-label^="Raffle:"])):not(:has(section#cajas-en-directo)):not(:has(section[aria-label^="Apuesta:"])):not(:has(section[aria-label^="Guess:"])) > div {
+aside[aria-label="Participa en el directo"]:not(:has(section[aria-label^="Raffle:"])):not(:has(section#cajas-en-directo)):not(:has(section[aria-label^="Apuesta:"])):not(:has(section[aria-label^="Guess"])) > section,
+aside[aria-label="Participa en el directo"]:not(:has(section[aria-label^="Raffle:"])):not(:has(section#cajas-en-directo)):not(:has(section[aria-label^="Apuesta:"])):not(:has(section[aria-label^="Guess"])) > div {
   flex: 0 1 420px !important;
   max-width: 420px !important;
   min-width: 0 !important;
 }
 
-aside[aria-label="Participa en el directo"]:not(:has(section[aria-label^="Raffle:"])):not(:has(section#cajas-en-directo)):not(:has(section[aria-label^="Apuesta:"])):not(:has(section[aria-label^="Guess:"]))::before,
-aside[aria-label="Participa en el directo"]:not(:has(section[aria-label^="Raffle:"])):not(:has(section#cajas-en-directo)):not(:has(section[aria-label^="Apuesta:"])):not(:has(section[aria-label^="Guess:"]))::after {
+aside[aria-label="Participa en el directo"]:not(:has(section[aria-label^="Raffle:"])):not(:has(section#cajas-en-directo)):not(:has(section[aria-label^="Apuesta:"])):not(:has(section[aria-label^="Guess"]))::before,
+aside[aria-label="Participa en el directo"]:not(:has(section[aria-label^="Raffle:"])):not(:has(section#cajas-en-directo)):not(:has(section[aria-label^="Apuesta:"])):not(:has(section[aria-label^="Guess"]))::after {
   display: none !important;
 }
