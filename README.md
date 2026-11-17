@@ -645,3 +645,30 @@ O en `chrome://extensions` → **"Empaquetar extensión"**.
 > Para **Firefox**, `chrome.*` funciona igual con `browser.*`; solo haría falta
 > duplicar `manifest.json` con `"browser_specific_settings.gecko.id"` para
 > publicar en addons.mozilla.org.
+
+## 10. Pruebas
+
+El banco de pruebas vive en `~/Downloads/test-andypsx-extensions-lite` (proyecto
+independiente, no se distribuye con la extensión). Su README explica qué cubre
+cada suite, cómo correrlas y de dónde sale la página de prueba.
+
+Resumen de las suites:
+
+| Suite | Qué valida |
+| --- | --- |
+| `phase0` | Supuestos del banco: debugger con CDP, inyector, muestreo CPU |
+| `det` | Matriz determinista: raffles (todos los caminos), clic, sesión, CSS, módulos, navegación, recarga |
+| `burst` | Ráfagas de 5/10 raffles y cascadas con ruido |
+| `fuzz` | Escenarios aleatorios con semilla, reproducibles |
+| `session` | Ventana de calentamiento de 5 min en tiempo real |
+| `bg` | Background con la API chrome simulada, incluido el presupuesto de 30 s del clic confiable |
+| `multi` | 20 perfiles en paralelo (multi-pestaña/multi-navegador) |
+| `soak` | 30 min con raffles aleatorios: fugas y deriva de CPU |
+| `perf` | CPU por proceso y métricas del hilo principal, comparando commits |
+
+Con `debug` activado, el módulo raffles reporta `Escaneos en el último minuto`
+para comprobar la frecuencia real de escaneo:
+
+```js
+chrome.storage.local.set({ debug: true });
+```
