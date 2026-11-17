@@ -144,6 +144,8 @@ function nextClickDelay(batchHasClick) {
 export function init(ctx) {
   const moduleState = {
     observer: null,
+    guardObserver: null,
+    observedAside: null,
     scanTimer: null,
     nextScanAt: null,
     lastScanAt: 0,
@@ -481,12 +483,40 @@ export function init(ctx) {
     if (relevant) scheduleScan();
   }
 
+  // Detección: observer sobre el aside de participación, no sobre el body.
+  // Ahorra pasar cada mutación de la página (chat, contadores, feed) por el
+  // filtro de raffles.
+  function attachAsideObserver() {
+    const aside = document.querySelector(
+      'aside[aria-label="Participa en el directo"]',
+    );
+
+    if (!aside || moduleState.observedAside === aside) return Boolean(aside);
+
+    if (moduleState.observedAside?.isConnected) {
+      moduleState.observer.disconnect();
+    }
+    moduleState.observedAside = aside;
+    moduleState.observer.observe(aside, { childList: true, subtree: true });
+    return true;
+  }
+
+  // Red de seguridad: si React reemplaza el aside, el observer viejo queda
+  // mirando un nodo huérfano. Este guard barato del body (O(1) por lote) lo
+  // detecta y reengancha al aside nuevo.
+  function handleGuardMutations() {
+    if (moduleState.observedAside?.isConnected) return;
+    if (attachAsideObserver()) scan();
+  }
+
   moduleState.observer = new MutationObserver(handleMutations);
+  moduleState.guardObserver = new MutationObserver(handleGuardMutations);
 
   const root = document.body ?? document.documentElement;
   if (root) {
-    moduleState.observer.observe(root, { childList: true, subtree: true });
+    moduleState.guardObserver.observe(root, { childList: true, subtree: true });
   }
+  attachAsideObserver();
 
   // Latido de escaneo por alarma del background: refuerzo al observer para que
   // la detección siga siendo regular con la pestaña en segundo plano.
@@ -521,6 +551,7 @@ export function destroy() {
   moduleState.stopped = true;
   moduleState.queue.length = 0;
   moduleState.observer?.disconnect();
+  moduleState.guardObserver?.disconnect();
   window.clearTimeout(moduleState.scanTimer);
 
   if (moduleState.scanListener) {
