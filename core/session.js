@@ -251,18 +251,63 @@ export function applySessionGate(definitions, states, session) {
   return next;
 }
 
+// Ventana de calentamiento: la página tarda en renderizar la sección de
+// cuenta, así que la sesión se vigila activamente solo durante los primeros
+// minutos desde que se abre (o desde que se vuelve a /live). Tras la ventana,
+// con sesión iniciada la vigilancia periódica se pausa: un logout solo se
+// detecta al recargar, navegar o en una petición puntual session:get. Sin
+// sesión, se sigue comprobando hasta detectar el login.
+export const SESSION_WARMUP_MS = 5 * 60 * 1000;
+
 export function startSessionWatcher({ onChange, shouldCheck = () => true } = {}) {
   let last = null;
-  let stopped = false;
+  let paused = false;
+  let destroyed = false;
+  let warmupStartedAt = Date.now();
+  let listenersArmed = false;
   let debounceTimer = null;
   let checking = null;
 
+  function armListeners() {
+    if (listenersArmed) return;
+    listenersArmed = true;
+
+    interval = window.setInterval(() => {
+      if (!paused) void check();
+    }, SESSION_CHECK_INTERVAL_MS);
+
+    window.addEventListener("pageshow", scheduleCheck);
+    document.addEventListener("visibilitychange", handleVisibility);
+  }
+
+  function disarmListeners() {
+    if (!listenersArmed) return;
+    listenersArmed = false;
+    window.clearInterval(interval);
+    window.clearTimeout(debounceTimer);
+    window.removeEventListener("pageshow", scheduleCheck);
+    document.removeEventListener("visibilitychange", handleVisibility);
+  }
+
+  // Pausa la vigilancia periódica cuando la ventana de calentamiento terminó
+  // y ya hay sesión iniciada. Sin sesión se sigue comprobando hasta el login.
+  function maybePauseAfterWarmup() {
+    if (paused || destroyed) return;
+    if (Date.now() - warmupStartedAt < SESSION_WARMUP_MS) return;
+    if (!last?.known || !last.loggedIn) return;
+
+    paused = true;
+    disarmListeners();
+    log("Sesión: vigilancia periódica pausada tras la ventana de calentamiento.");
+  }
+
   async function readAndSave() {
-    if (stopped || !shouldCheck()) return null;
+    if (destroyed || !shouldCheck()) return null;
 
     // Contexto invalidado: no hay chrome.* que usar; detener sin warnings.
     if (!extensionRuntimeAlive()) {
-      stopped = true;
+      destroyed = true;
+      disarmListeners();
       return null;
     }
 
@@ -274,6 +319,7 @@ export function startSessionWatcher({ onChange, shouldCheck = () => true } = {})
 
     if (!changed) {
       last = domSession;
+      maybePauseAfterWarmup();
       return { ...domSession, origin: location.origin, updatedAt: Date.now() };
     }
 
@@ -281,7 +327,8 @@ export function startSessionWatcher({ onChange, shouldCheck = () => true } = {})
       await saveSessionState(domSession);
     } catch (error) {
       if (isInvalidatedError(error)) {
-        stopped = true;
+        destroyed = true;
+        disarmListeners();
         return null;
       }
 
@@ -290,6 +337,7 @@ export function startSessionWatcher({ onChange, shouldCheck = () => true } = {})
     }
 
     last = domSession;
+    maybePauseAfterWarmup();
 
     const sessionLabel = !domSession.known
       ? "desconocida"
@@ -318,7 +366,7 @@ export function startSessionWatcher({ onChange, shouldCheck = () => true } = {})
   }
 
   function check() {
-    if (stopped) return Promise.resolve(null);
+    if (destroyed) return Promise.resolve(null);
     if (checking) return checking;
 
     checking = readAndSave().finally(() => {
@@ -329,7 +377,7 @@ export function startSessionWatcher({ onChange, shouldCheck = () => true } = {})
   }
 
   function scheduleCheck() {
-    if (stopped) return;
+    if (destroyed || paused) return;
     window.clearTimeout(debounceTimer);
     debounceTimer = window.setTimeout(() => {
       void check();
@@ -340,16 +388,13 @@ export function startSessionWatcher({ onChange, shouldCheck = () => true } = {})
   // contadores) y cada mutación reiniciaba el debounce. El interval de
   // SESSION_CHECK_INTERVAL_MS, pageshow y visibilitychange cubren la
   // detección de login/logout con una fracción del coste.
-  const interval = window.setInterval(() => {
-    void check();
-  }, SESSION_CHECK_INTERVAL_MS);
+  let interval = null;
 
   const handleVisibility = () => {
     if (!document.hidden) scheduleCheck();
   };
 
-  window.addEventListener("pageshow", scheduleCheck);
-  document.addEventListener("visibilitychange", handleVisibility);
+  armListeners();
 
   const messageListener = (message, sender, sendResponse) => {
     if (message?.type !== "session:get") return false;
@@ -368,12 +413,19 @@ export function startSessionWatcher({ onChange, shouldCheck = () => true } = {})
   return {
     ready,
     check,
+
+    // Volver a /live reinicia la ventana de calentamiento y reanuda la
+    // vigilancia si estaba pausada.
+    restartWarmup() {
+      if (destroyed) return;
+      warmupStartedAt = Date.now();
+      paused = false;
+      armListeners();
+    },
+
     destroy() {
-      stopped = true;
-      window.clearInterval(interval);
-      window.clearTimeout(debounceTimer);
-      window.removeEventListener("pageshow", scheduleCheck);
-      document.removeEventListener("visibilitychange", handleVisibility);
+      destroyed = true;
+      disarmListeners();
 
       try {
         chrome.runtime?.onMessage?.removeListener?.(messageListener);

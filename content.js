@@ -393,6 +393,12 @@
 
       if (location.href === currentUrl) return;
       currentUrl = location.href;
+
+      // Volver a /live reinicia la ventana de calentamiento de sesión.
+      if (config.isTargetPage(location.href)) {
+        sessionWatcher.restartWarmup?.();
+      }
+
       void sessionWatcher.check();
       scheduleSync();
       void ensureCssState();
@@ -447,20 +453,25 @@
       return true;
     }
 
+    // Frecuencias bajas: cada despertar de la pestaña cuesta CPU y con
+    // muchos perfiles abiertos es la suma lo que satura. Los eventos
+    // popstate/hashchange cubren la mayoría de los cambios de URL al
+    // instante; el interval es la red de seguridad para SPAs que reescriben
+    // la URL sin eventos.
     urlInterval = window.setInterval(() => {
       if (stopIfDead()) return;
       handleUrlChange();
-    }, 500);
+    }, 2000);
 
     cssInterval = window.setInterval(() => {
       if (stopIfDead()) return;
       void ensureCssState();
-    }, 2000);
+    }, 10000);
 
     aliveInterval = window.setInterval(() => {
       if (stopped) return;
       void probeRuntime();
-    }, 3000);
+    }, 15000);
 
     window.addEventListener("popstate", handleUrlChange);
     window.addEventListener("hashchange", handleUrlChange);
