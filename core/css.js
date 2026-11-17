@@ -88,8 +88,19 @@ async function insertActiveModules(tabId, url, states, definitions) {
 // La cola por pestaña evita que dos eventos "loading" dejen CSS duplicado.
 // getStates se ejecuta dentro de la cola para que una lectura antigua nunca
 // pise un cambio de estado más reciente.
+//
+// Deduplicación: mientras un sync ya está en cola para esa pestaña y URL, las
+// peticiones que lleguen (p. ej. session:update y css:ensure a la vez)
+// comparten ese sync en lugar de encolar otro removeCSS/insertCSS completo,
+// que recalcula los estilos de toda la página.
+const queuedSyncs = new Map();
+
 export function syncTab(tabId, url, getStates, modules) {
-  return queueForTab(tabId, async () => {
+  const queued = queuedSyncs.get(tabId);
+  if (queued && queued.url === url) return queued.promise;
+
+  const promise = queueForTab(tabId, async () => {
+    queuedSyncs.delete(tabId);
     const definitions = Array.isArray(modules) ? modules : [];
     const states =
       typeof getStates === "function" ? await getStates() : getStates;
@@ -100,5 +111,11 @@ export function syncTab(tabId, url, getStates, modules) {
 
     await removeCss(tabId, allFiles);
     return insertActiveModules(tabId, url, states, definitions);
+  });
+
+  queuedSyncs.set(tabId, { url, promise });
+
+  return promise.finally(() => {
+    if (queuedSyncs.get(tabId)?.promise === promise) queuedSyncs.delete(tabId);
   });
 }
