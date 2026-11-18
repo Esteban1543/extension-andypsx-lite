@@ -636,7 +636,7 @@ del splash del sitio explicaba la diferencia 4 vs 5 del informe anterior.
 
 ```bash
 cd /home/manager/Downloads
-zip -r andypsx-extension-v2.0.0.zip andypsx-extension-v1.0.4 \
+zip -r andypsx-extension-v3.0.0.zip andypsx-extension-v1.0.4 \
   -x '*/.git/*' '*/__pycache__/*'
 ```
 
